@@ -27,10 +27,17 @@ jobs:
       - name: Debug -- fingerprint the received deploy key
         run: |
           echo "host is set: $([ -n "${{ secrets.DEPLOY_HOST }}" ] && echo yes || echo no)"
-          echo "username is set: $([ -n "${{ secrets.DEPLOY_USER }}" ] && echo yes || echo no)"
+          echo "username length: $(printf '%s' "${{ secrets.DEPLOY_USER }}" | wc -c)"
+          echo "username bytes (octal, catches hidden whitespace):"
+          printf '%s' "${{ secrets.DEPLOY_USER }}" | od -c | head -3
           echo "key line count: $(printf '%s' "${{ secrets.DEPLOY_SSH_KEY }}" | wc -l)"
-          printf '%s' "${{ secrets.DEPLOY_SSH_KEY }}" > /tmp/k
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > /tmp/k
+          chmod 600 /tmp/k
           ssh-keygen -lf /tmp/k || echo "ssh-keygen could not parse the key -- it is malformed"
+          echo "--- raw ssh test (bypassing appleboy/ssh-action) ---"
+          ssh -vvv -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=10 \
+            -i /tmp/k "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+            echo RAW_SSH_OK 2>&1 | tail -40
           rm -f /tmp/k
 
       - name: Deploy over SSH
