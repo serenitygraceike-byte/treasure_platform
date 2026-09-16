@@ -5,13 +5,20 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
-import { canManageTreasury } from "@/lib/rbac";
+import { canApproveIntercompany, canManageTreasury } from "@/lib/rbac";
 import { logAudit } from "@/lib/audit";
 import { createBankAccountSchema } from "@/lib/validation/bank-account";
 import { createReservationSchema, createTransferSchema } from "@/lib/validation/treasury";
+import { createIntercompanyTransferSchema } from "@/lib/validation/intercompany";
 import { createBankAccount } from "@/lib/treasury/bank-accounts";
 import { createReservation, releaseReservation } from "@/lib/treasury/reservations";
 import { createTransfer, settleTransfer } from "@/lib/treasury/transfers";
+import {
+  approveIntercompanyTransfer,
+  createIntercompanyTransfer,
+  reconcileIntercompanyTransfer,
+  rejectIntercompanyTransfer,
+} from "@/lib/treasury/intercompany";
 import { LedgerError } from "@/lib/ledger/errors";
 
 // Server Actions run as their own request -- getCurrentUser()/RBAC are
@@ -37,6 +44,18 @@ async function requireTreasuryManager(companyId: string) {
   }
 
   return { user, company };
+}
+
+// Approval spans two companies (see lib/rbac.ts canApproveIntercompany) --
+// checked at the org level, not against the company currently shown on
+// the dashboard. companyId here is only where to redirect back to.
+async function requireIntercompanyApprover(organizationId: string, companyId: string) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+  if (!(await canApproveIntercompany(organizationId, user.id))) {
+    backTo(companyId, "Only an org-level APPROVER, ADMIN or OWNER can do that.");
+  }
+  return user;
 }
 
 export async function addBankAccountAction(formData: FormData) {
@@ -166,6 +185,125 @@ export async function settleTransferAction(formData: FormData) {
     await settleTransfer(transferId, { actorUserId: user.id, correlationId: crypto.randomUUID() });
   } catch (err) {
     backTo(companyId, err instanceof LedgerError ? err.message : "Could not settle the transfer.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+// destinationAccountId alone determines toCompanyId (looked up below) --
+// the dashboard's single "destination account" picker lists bank
+// accounts of every other company in the org, avoiding a cascading
+// company -> account client-side dropdown.
+export async function initiateIntercompanyTransferAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const bankAccountId = String(formData.get("bankAccountId"));
+  const { user } = await requireTreasuryManager(companyId);
+
+  const parsed = createIntercompanyTransferSchema
+    .pick({ destinationAccountId: true, amount: true, purpose: true })
+    .safeParse({
+      destinationAccountId: formData.get("destinationAccountId"),
+      amount: formData.get("amount"),
+      purpose: formData.get("purpose") || undefined,
+    });
+  if (!parsed.success) {
+    backTo(companyId, parsed.error.issues[0]?.message ?? "Invalid transfer.");
+    return;
+  }
+
+  const bankAccount = await prisma.bankAccount.findUnique({ where: { id: bankAccountId } });
+  if (!bankAccount || bankAccount.companyId !== companyId) {
+    backTo(companyId, "Bank account not found.");
+    return;
+  }
+
+  const destinationAccount = await prisma.bankAccount.findUnique({
+    where: { id: parsed.data.destinationAccountId },
+  });
+  if (!destinationAccount) {
+    backTo(companyId, "Destination bank account not found.");
+    return;
+  }
+
+  try {
+    await createIntercompanyTransfer(bankAccount, {
+      toCompanyId: destinationAccount.companyId,
+      destinationAccountId: destinationAccount.id,
+      amount: parsed.data.amount,
+      purpose: parsed.data.purpose,
+      idempotencyKey: crypto.randomUUID(),
+      actorUserId: user.id,
+      correlationId: crypto.randomUUID(),
+    });
+  } catch (err) {
+    backTo(companyId, err instanceof Error ? err.message : "Could not request the transfer.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function approveIntercompanyTransferAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const transferId = String(formData.get("transferId"));
+
+  const transfer = await prisma.intercompanyTransfer.findUnique({ where: { id: transferId } });
+  if (!transfer) {
+    backTo(companyId, "Intercompany transfer not found.");
+    return;
+  }
+  const user = await requireIntercompanyApprover(transfer.organizationId, companyId);
+
+  try {
+    await approveIntercompanyTransfer(transferId, {
+      actorUserId: user.id,
+      correlationId: crypto.randomUUID(),
+    });
+  } catch (err) {
+    backTo(companyId, err instanceof LedgerError ? err.message : "Could not approve the transfer.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function rejectIntercompanyTransferAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const transferId = String(formData.get("transferId"));
+
+  const transfer = await prisma.intercompanyTransfer.findUnique({ where: { id: transferId } });
+  if (!transfer) {
+    backTo(companyId, "Intercompany transfer not found.");
+    return;
+  }
+  const user = await requireIntercompanyApprover(transfer.organizationId, companyId);
+
+  await rejectIntercompanyTransfer(
+    transferId,
+    { actorUserId: user.id, correlationId: crypto.randomUUID() },
+    (formData.get("reason") as string) || undefined
+  );
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function reconcileIntercompanyTransferAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const transferId = String(formData.get("transferId"));
+  const { user } = await requireTreasuryManager(companyId);
+
+  try {
+    await reconcileIntercompanyTransfer(transferId, {
+      actorUserId: user.id,
+      correlationId: crypto.randomUUID(),
+    });
+  } catch (err) {
+    backTo(companyId, err instanceof Error ? err.message : "Could not reconcile the transfer.");
     return;
   }
 

@@ -1,13 +1,18 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUser } from "@/lib/session";
-import { canManageTreasury } from "@/lib/rbac";
+import { canApproveIntercompany, canManageTreasury } from "@/lib/rbac";
 import { listBankAccounts } from "@/lib/treasury/bank-accounts";
 import { getBankAccountBalance } from "@/lib/treasury/balances";
 import { listReservations } from "@/lib/treasury/reservations";
 import { listTransfers } from "@/lib/treasury/transfers";
+import { listIntercompanyTransfers } from "@/lib/treasury/intercompany";
 import {
   addBankAccountAction,
+  approveIntercompanyTransferAction,
+  initiateIntercompanyTransferAction,
+  reconcileIntercompanyTransferAction,
+  rejectIntercompanyTransferAction,
   releaseReservationAction,
   reserveFundsAction,
   settleTransferAction,
@@ -51,12 +56,27 @@ export default async function DashboardPage({
   const company =
     companies.find((c) => c.id === requestedCompanyId) ?? companies[0]!;
 
-  const [bankAccounts, reservations, transfers, canManage] = await Promise.all([
-    listBankAccounts(company.id),
-    listReservations(company.id),
-    listTransfers(company.id),
-    canManageTreasury(company.id, company.organizationId, user.id),
-  ]);
+  const [bankAccounts, reservations, transfers, intercompanyTransfers, canManage, canApprove] =
+    await Promise.all([
+      listBankAccounts(company.id),
+      listReservations(company.id),
+      listTransfers(company.id),
+      listIntercompanyTransfers(company.id),
+      canManageTreasury(company.id, company.organizationId, user.id),
+      canApproveIntercompany(company.organizationId, user.id),
+    ]);
+
+  // Every company in the org, for counterparty names and the destination
+  // picker -- not just `companies` (the ones *this user* can see), since
+  // an intercompany transfer's other side may not be one of them.
+  const orgCompanies = await prisma.company.findMany({
+    where: { organizationId: company.organizationId },
+  });
+  const companyNameById = new Map(orgCompanies.map((c) => [c.id, c.legalName]));
+  const otherCompanyBankAccounts = await prisma.bankAccount.findMany({
+    where: { company: { organizationId: company.organizationId, id: { not: company.id } } },
+    include: { company: true },
+  });
 
   const balances = await Promise.all(
     bankAccounts.map(async (account) => {
@@ -262,6 +282,112 @@ export default async function DashboardPage({
             </label>
             <button type="submit" className="rounded bg-neutral-900 px-3 py-1 text-white">
               Start transfer
+            </button>
+          </form>
+        ) : null}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="font-semibold">Intercompany transfers</h2>
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-neutral-200">
+              <th className="py-1">Direction</th>
+              <th>Amount</th>
+              <th>Purpose</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {intercompanyTransfers.map((t) => {
+              const isSource = t.fromCompanyId === company.id;
+              const counterpartyName =
+                companyNameById.get(isSource ? t.toCompanyId : t.fromCompanyId) ?? "Unknown company";
+              return (
+                <tr key={t.id} className="border-b border-neutral-100">
+                  <td className="py-1">
+                    {isSource ? `→ ${counterpartyName}` : `← ${counterpartyName}`}
+                  </td>
+                  <td>
+                    {t.amount.toString()} {t.currency}
+                  </td>
+                  <td>{t.purpose ?? ""}</td>
+                  <td>
+                    {t.status}
+                    {t.reconciledAt ? " (reconciled)" : ""}
+                  </td>
+                  <td className="flex gap-2">
+                    {canApprove && t.status === "PENDING_APPROVAL" ? (
+                      <>
+                        <form action={approveIntercompanyTransferAction}>
+                          <input type="hidden" name="companyId" value={company.id} />
+                          <input type="hidden" name="transferId" value={t.id} />
+                          <button type="submit" className="text-blue-600 underline">
+                            Approve
+                          </button>
+                        </form>
+                        <form action={rejectIntercompanyTransferAction}>
+                          <input type="hidden" name="companyId" value={company.id} />
+                          <input type="hidden" name="transferId" value={t.id} />
+                          <button type="submit" className="text-red-600 underline">
+                            Reject
+                          </button>
+                        </form>
+                      </>
+                    ) : null}
+                    {!isSource && canManage && t.status === "APPROVED" && !t.reconciledAt ? (
+                      <form action={reconcileIntercompanyTransferAction}>
+                        <input type="hidden" name="companyId" value={company.id} />
+                        <input type="hidden" name="transferId" value={t.id} />
+                        <button type="submit" className="text-blue-600 underline">
+                          Reconcile
+                        </button>
+                      </form>
+                    ) : null}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+
+        {canManage && bankAccounts.length > 0 && otherCompanyBankAccounts.length > 0 ? (
+          <form
+            action={initiateIntercompanyTransferAction}
+            className="flex flex-wrap items-end gap-2 text-sm"
+          >
+            <input type="hidden" name="companyId" value={company.id} />
+            <label className="flex flex-col gap-1">
+              From
+              <select name="bankAccountId" className="rounded border border-neutral-300 px-2 py-1">
+                {bankAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              To
+              <select name="destinationAccountId" className="rounded border border-neutral-300 px-2 py-1">
+                {otherCompanyBankAccounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.company.legalName} — {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Amount
+              <input name="amount" required placeholder="0.00" className="rounded border border-neutral-300 px-2 py-1" />
+            </label>
+            <label className="flex flex-col gap-1">
+              Purpose
+              <input name="purpose" className="rounded border border-neutral-300 px-2 py-1" />
+            </label>
+            <button type="submit" className="rounded bg-neutral-900 px-3 py-1 text-white">
+              Request transfer
             </button>
           </form>
         ) : null}
