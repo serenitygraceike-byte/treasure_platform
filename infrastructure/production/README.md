@@ -56,31 +56,26 @@ every time.
 
 ## Auto-deploy (`.github/workflows/deploy.yml`)
 
-Runs after `CI` succeeds on `main`, behind a GitHub Environment named
-`production` — configure **required reviewers** on that environment in
-repo settings, or this deploys on every green push with no human gate,
-defeating the point of `docs/04-DEPLOYMENT-SPEC.md`'s "manual production
-approval" step (there's no separate staging environment to soften that;
-this VPS is the only one that exists).
+Configured 2026-09-17. Runs after `CI` succeeds on `main`, behind a
+GitHub Environment named `production` with required reviewers — that
+manual click is what stands in for `docs/04-DEPLOYMENT-SPEC.md`'s
+"manual production approval" step, since there's no separate staging
+environment to soften it first (this VPS is the only one that exists).
 
-One-time setup, not done by this repo's code (deliberately — these are
-credentials, not something to automate blindly):
+Setup completed (credentials/access-control, done by hand in GitHub
+settings and on the server, not scripted by this repo):
 
 1. **Repo secrets** (Settings → Secrets and variables → Actions):
-   `DEPLOY_HOST` (`38.60.215.236`), `DEPLOY_USER` (`root`),
-   `DEPLOY_SSH_KEY` (the *private* key matching a key already authorized
-   in the VPS's `~/.ssh/authorized_keys` — do not reuse a personal key
-   with broader access than this deploy needs; a dedicated key scoped to
-   this purpose is safer).
-2. **Environment protection**: Settings → Environments → `production` →
-   add required reviewers.
-3. **Server-side git clone**: `/opt/treasury-platform` was set up by
-   `scp`/`tar` from a local checkout, not `git clone` — the workflow's
-   `git fetch && git reset --hard` needs it to actually be a git
-   repository with `origin` reachable from the server (a GitHub deploy
-   key with read access, added to the repo's Settings → Deploy keys).
-   Until this is done, run `git init && git remote add origin <url>` (or
-   re-clone) on the server once, by hand.
+   `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY` — the last is a
+   dedicated `github-actions-deploy` keypair (not the maintainer's
+   personal key), public half in the VPS's `~/.ssh/authorized_keys`.
+2. **Environment protection**: `production` environment has required
+   reviewers.
+3. **Server-side git clone**: `/opt/treasury-platform` is now an actual
+   `git` checkout (`origin` over SSH via a separate read-only deploy key,
+   `~/.ssh/treasury_platform_deploy`, added to the repo's Deploy keys) —
+   converted from the original `scp`/`tar` deploy, so the workflow's
+   `git fetch && git reset --hard origin/main` has something to act on.
 
 ## First deploy of Phase 2 (Formance)
 
