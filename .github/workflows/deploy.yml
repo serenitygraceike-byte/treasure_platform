@@ -1,0 +1,36 @@
+name: Deploy
+
+# docs/04-DEPLOYMENT-SPEC.md's CI/CD list ends "deploy staging, manual
+# production approval". This repo only has one environment (production,
+# wau.digital) — no separate staging VPS exists yet — so the manual-
+# approval step is done with a GitHub Environment ("production") that
+# has required reviewers configured in repo settings. Add that reviewer
+# rule before relying on this workflow; without it, this deploys on
+# every successful push to main with no human gate at all.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/treasury-platform
+            git fetch origin main
+            git reset --hard origin/main
+            cd infrastructure/production
+            docker compose --env-file ../../.env build migrate web
+            docker compose --env-file ../../.env run --rm migrate
+            docker compose --env-file ../../.env up -d web

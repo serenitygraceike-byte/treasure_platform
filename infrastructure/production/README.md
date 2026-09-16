@@ -49,7 +49,40 @@ ssh myserver "cd /opt/treasury-platform/infrastructure/production && \
 
 New migration: ship it, then `docker compose --env-file ../../.env run --rm migrate`.
 
-### First deploy of Phase 2 (Formance)
+Note `docker compose run`/`up` alone do **not** rebuild an image on their
+own — a stale `migrate`/`web` image silently runs old code even after
+new files land on the server. `docker compose build <service>` first,
+every time.
+
+## Auto-deploy (`.github/workflows/deploy.yml`)
+
+Runs after `CI` succeeds on `main`, behind a GitHub Environment named
+`production` — configure **required reviewers** on that environment in
+repo settings, or this deploys on every green push with no human gate,
+defeating the point of `docs/04-DEPLOYMENT-SPEC.md`'s "manual production
+approval" step (there's no separate staging environment to soften that;
+this VPS is the only one that exists).
+
+One-time setup, not done by this repo's code (deliberately — these are
+credentials, not something to automate blindly):
+
+1. **Repo secrets** (Settings → Secrets and variables → Actions):
+   `DEPLOY_HOST` (`38.60.215.236`), `DEPLOY_USER` (`root`),
+   `DEPLOY_SSH_KEY` (the *private* key matching a key already authorized
+   in the VPS's `~/.ssh/authorized_keys` — do not reuse a personal key
+   with broader access than this deploy needs; a dedicated key scoped to
+   this purpose is safer).
+2. **Environment protection**: Settings → Environments → `production` →
+   add required reviewers.
+3. **Server-side git clone**: `/opt/treasury-platform` was set up by
+   `scp`/`tar` from a local checkout, not `git clone` — the workflow's
+   `git fetch && git reset --hard` needs it to actually be a git
+   repository with `origin` reachable from the server (a GitHub deploy
+   key with read access, added to the repo's Settings → Deploy keys).
+   Until this is done, run `git init && git remote add origin <url>` (or
+   re-clone) on the server once, by hand.
+
+## First deploy of Phase 2 (Formance)
 
 One-time steps on the server before the above applies:
 
