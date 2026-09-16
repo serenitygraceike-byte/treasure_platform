@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: treasury-postgres
+    restart: unless-stopped
+    env_file: ../../.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - treasury_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+    mem_limit: 512m
+    # No published port — reachable only from the internal network.
+
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: treasury-web
+    restart: unless-stopped
+    env_file: ../../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    mem_limit: 512m
+    # No published port — Caddy is the only public entry point.
+
+  # One-off migration/seed runner — uses the `builder` stage, which still
+  # has the Prisma CLI and tsx (devDependencies the slim `web` image drops).
+  # Not started by `up`; run explicitly: `docker compose run --rm migrate`.
+  migrate:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: builder
+    command: sh -c "npx prisma migrate deploy && npx prisma db seed"
+    env_file: ../../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    profiles: ["tools"]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: treasury-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [web]
+    networks: [internal]
+    mem_limit: 128m
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  treasury_pgdata:
+  caddy_data:
+  caddy_config:

@@ -2,7 +2,11 @@
 
 ## Status
 
-Architecture Freeze v1 — ready for implementation planning.
+Phase 0 and Phase 1 complete and deployed. Live at **https://wau.digital**
+(seed users in `prisma/seed.ts`, password `SeedDev1234!`). Local dev:
+`pnpm install && pnpm exec prisma migrate deploy && pnpm exec prisma db seed && pnpm dev`.
+Production deployment notes: `infrastructure/production/README.md`.
+Next up: Phase 2 (Formance ledger integration).
 
 ## Product
 

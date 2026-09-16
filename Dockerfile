@@ -25,4 +25,7 @@ COPY --from=builder /app/generated ./generated
 COPY --from=builder /app/package.json ./package.json
 
 EXPOSE 3000
-CMD ["pnpm", "start"]
+# Not `pnpm start` — the runner stage never cached a pnpm binary, so
+# corepack would re-download it from the registry on every container
+# start. `next` already lives in the node_modules we copied in.
+CMD ["node_modules/.bin/next", "start"]
