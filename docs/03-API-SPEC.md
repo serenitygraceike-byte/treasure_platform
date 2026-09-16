@@ -73,7 +73,10 @@ Headers:
 - GET `/intercompany-transfers`
 - GET `/intercompany-transfers/:id`
 - POST `/intercompany-transfers/:id/approve`
+- POST `/intercompany-transfers/:id/reject` (Phase 4 — not in the original spec; approve-only left no way to decline a request, mirrors the `reject` verb already used for Payments above)
 - POST `/intercompany-transfers/:id/reconcile`
+
+`approve`/`reject` require an org-level `APPROVER`, `ADMIN` or `OWNER` — not scoped to either company in the transfer, since approval spans both. `reconcile` requires a `TREASURY_MANAGER`+ of the *receiving* company. `POST /intercompany-transfers` requires `Idempotency-Key`; the other three don't (guarded by status transition instead — a transfer can only leave `PENDING_APPROVAL`/reach reconciled once).
 
 ## Expenses
 

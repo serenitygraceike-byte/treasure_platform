@@ -227,15 +227,29 @@ Unique:
 - organization_id FK
 - from_company_id FK
 - to_company_id FK
-- payment_id FK
-- amount
-- currency
-- purpose
-- status
+- bank_account_id FK — source, must belong to from_company_id
+- destination_account_id FK — must belong to to_company_id, same currency as source (no FX support)
+- payment_id FK, deferred — no `payments` table exists yet (Phase 6); do not add this FK until it does
+- amount NUMERIC(20,8)
+- currency CHAR(3)
+- purpose nullable
+- status (PENDING_APPROVAL, APPROVED, REJECTED) — this row's PENDING_APPROVAL state is the "obligation"; there is no separate obligations table
 - due_at nullable
+- start_ledger_transaction_id nullable — set on approve
+- settle_ledger_transaction_id nullable — set on approve
+- idempotency_key
+- correlation_id
+- requested_by
+- requested_at
+- approved_by nullable
 - sent_at nullable
 - received_at nullable
 - reconciled_at nullable
+- rejected_by nullable
+- rejected_at nullable
+- rejection_reason nullable
+
+Unique: `(bank_account_id, idempotency_key)`
 
 ### expense_categories
 
