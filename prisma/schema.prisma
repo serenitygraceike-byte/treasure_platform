@@ -1,7 +1,12 @@
-// Phase 0: Better Auth's own tables only, generated via `npx auth generate`.
-// Domain models (organizations, companies, payments, ...) are added in
-// Phase 1 per docs/09-CLAUDE-HANDOFF.md, using prisma/schema.prisma.example
-// as the reference to merge in — not duplicated here ahead of that phase.
+// Better Auth's own tables (User/Session/Account/Verification below) are
+// generated via `npx auth generate` and owned by it — do not hand-edit
+// their fields. Domain models added below never get a Prisma `@relation`
+// pointing into these models, on purpose: a future `auth generate` run
+// overwrites this whole block, and a relation would need a matching field
+// added there too. Where a domain row needs to reference a user (e.g.
+// Membership.userId), it's a plain column with a real Postgres foreign key
+// added by hand in the migration SQL — enforced in the database, invisible
+// to Prisma, safe across regenerations.
 
 generator client {
   provider = "prisma-client"
@@ -73,4 +78,116 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+// ---------------------------------------------------------------------
+// Phase 1 domain models — docs/01-DATABASE-SPEC.md, scoped to what
+// docs/05-MVP-ROADMAP.md Phase 1 actually asks for: organization,
+// companies, users, memberships, RBAC, company access. Bank accounts,
+// payments, expenses, contracts and freelancers belong to later phases
+// and are intentionally not added yet, even though
+// prisma/schema.prisma.example sketches them — adding them now would be
+// scope creep ahead of their own vertical slice.
+// ---------------------------------------------------------------------
+
+// docs/07-SECURITY-AND-AUDIT.md "Authorization" — fixed role set, shared
+// by org-level and company-level membership.
+enum OrgRole {
+  OWNER
+  ADMIN
+  TREASURY_MANAGER
+  APPROVER
+  ACCOUNTANT
+  VIEWER
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+model Organization {
+  id           String   @id @default(uuid())
+  name         String
+  baseCurrency String   @db.Char(3)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  companies    Company[]
+  memberships  Membership[]
+  auditEvents  AuditEvent[]
+
+  @@map("organizations")
+}
+
+model Company {
+  id                 String        @id @default(uuid())
+  organizationId     String
+  legalName          String
+  countryCode        String        @db.Char(2)
+  registrationNumber String?
+  taxIdentifier      String?
+  baseCurrency       String        @db.Char(3)
+  status             CompanyStatus @default(ACTIVE)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  organization       Organization        @relation(fields: [organizationId], references: [id])
+  companyMemberships CompanyMembership[]
+
+  @@unique([organizationId, legalName])
+  @@index([organizationId])
+  @@map("companies")
+}
+
+// Org-level role. userId is Better Auth's user.id — see the note at the
+// top of this file for why it's a plain column, not a Prisma relation.
+model Membership {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  role           OrgRole
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+// Company-level access — org membership alone does not grant access to a
+// specific company (docs/05-MVP-ROADMAP.md Phase 1: "company access").
+model CompanyMembership {
+  id        String   @id @default(uuid())
+  companyId String
+  userId    String
+  role      OrgRole
+  createdAt DateTime @default(now())
+
+  company   Company  @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, userId])
+  @@index([userId])
+  @@map("company_memberships")
+}
+
+// Append-only — see docs/01-DATABASE-SPEC.md. No UPDATE/DELETE grant is
+// given to the application's runtime role (enforced in migration SQL).
+model AuditEvent {
+  id             String       @id @default(uuid())
+  organizationId String
+  actorUserId    String?
+  action         String
+  objectType     String
+  objectId       String?
+  correlationId  String
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@map("audit_events")
 }
