@@ -8,7 +8,7 @@ vi.mock("@/lib/prisma", () => ({
 }));
 
 import { prisma } from "@/lib/prisma";
-import { canAccessCompany, canManageTreasury, isOrgManager } from "@/lib/rbac";
+import { canAccessCompany, canApproveIntercompany, canManageTreasury, isOrgManager } from "@/lib/rbac";
 
 describe("isOrgManager", () => {
   it("is true for OWNER and ADMIN", async () => {
@@ -70,5 +70,30 @@ describe("canManageTreasury", () => {
     vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "APPROVER" } as never);
     vi.mocked(prisma.companyMembership.findUnique).mockResolvedValueOnce(null);
     expect(await canManageTreasury("company1", "org1", "user1")).toBe(false);
+  });
+});
+
+describe("canApproveIntercompany", () => {
+  it("is true for an org-level APPROVER", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "APPROVER" } as never);
+    expect(await canApproveIntercompany("org1", "user1")).toBe(true);
+    expect(prisma.companyMembership.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("is true for OWNER/ADMIN", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "OWNER" } as never);
+    expect(await canApproveIntercompany("org1", "user1")).toBe(true);
+  });
+
+  it("is false with no org membership at all, even if a company-level APPROVER exists", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce(null);
+    expect(await canApproveIntercompany("org1", "user1")).toBe(false);
+    // deliberately org-level only -- never falls back to companyMembership
+    expect(prisma.companyMembership.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("is false for a plain org-level TREASURY_MANAGER", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "TREASURY_MANAGER" } as never);
+    expect(await canApproveIntercompany("org1", "user1")).toBe(false);
   });
 });

@@ -48,3 +48,15 @@ export async function canManageTreasury(
   });
   return !!companyMembership && TREASURY_MANAGER_ROLES.includes(companyMembership.role);
 }
+
+// docs/05-MVP-ROADMAP.md Phase 4: intercompany approval spans two
+// companies, so it's deliberately org-level only, not company-scoped
+// like canManageTreasury -- a company-level APPROVER role does not
+// count here, since they'd only have visibility into one side of the
+// transfer.
+const INTERCOMPANY_APPROVER_ROLES: OrgRole[] = ["OWNER", "ADMIN", "APPROVER"];
+
+export async function canApproveIntercompany(organizationId: string, userId: string) {
+  const membership = await getOrgMembership(organizationId, userId);
+  return !!membership && INTERCOMPANY_APPROVER_ROLES.includes(membership.role);
+}

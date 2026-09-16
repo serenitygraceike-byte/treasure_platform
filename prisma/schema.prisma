@@ -136,6 +136,8 @@ model Company {
   organization       Organization        @relation(fields: [organizationId], references: [id])
   companyMemberships CompanyMembership[]
   bankAccounts       BankAccount[]
+  intercompanyTransfersOut IntercompanyTransfer[] @relation("IntercompanyFrom")
+  intercompanyTransfersIn  IntercompanyTransfer[] @relation("IntercompanyTo")
 
   @@unique([organizationId, legalName])
   @@index([organizationId])
@@ -228,6 +230,8 @@ model BankAccount {
   reservations         BankReservation[]
   transfersOut         BankTransfer[]    @relation("SourceAccount")
   transfersIn          BankTransfer[]    @relation("DestinationAccount")
+  intercompanyTransfersOut IntercompanyTransfer[] @relation("IntercompanySource")
+  intercompanyTransfersIn  IntercompanyTransfer[] @relation("IntercompanyDestination")
 
   @@index([companyId])
   @@map("bank_accounts")
@@ -298,4 +302,57 @@ model BankTransfer {
   @@unique([bankAccountId, idempotencyKey])
   @@index([companyId, status])
   @@map("bank_transfers")
+}
+
+// ---------------------------------------------------------------------
+// Phase 4 domain model — docs/05-MVP-ROADMAP.md "Intercompany". The
+// posting pattern is identical to BankTransfer's (bank -> in_transit ->
+// destination, lib/ledger/postings.ts C/D) with destinationAccountId
+// belonging to a *different* company -- Phase 3 restricted BankTransfer
+// to same-company specifically so this model could lift that
+// restriction without any lib/ledger/ changes. "Obligation" (roadmap
+// wording) is this row's PENDING_APPROVAL state, not a separate table --
+// docs/01-DATABASE-SPEC.md only ever specified one table here.
+// ---------------------------------------------------------------------
+
+enum IntercompanyTransferStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+model IntercompanyTransfer {
+  id                    String   @id @default(uuid())
+  organizationId        String
+  fromCompanyId         String
+  toCompanyId           String
+  bankAccountId         String // source, must belong to fromCompanyId
+  destinationAccountId  String // must belong to toCompanyId, same currency as source
+  amount                Decimal  @db.Decimal(20, 8)
+  currency              String   @db.Char(3)
+  purpose               String?
+  status                IntercompanyTransferStatus @default(PENDING_APPROVAL)
+  dueAt                 DateTime?
+  startLedgerTransactionId  String? // set on approve
+  settleLedgerTransactionId String? // set on approve
+  idempotencyKey        String
+  correlationId         String
+  requestedBy            String
+  requestedAt             DateTime @default(now())
+  approvedBy               String?
+  sentAt                    DateTime?
+  receivedAt                 DateTime?
+  reconciledAt                 DateTime?
+  rejectedBy                    String?
+  rejectedAt                     DateTime?
+  rejectionReason                  String?
+
+  fromCompany         Company     @relation("IntercompanyFrom", fields: [fromCompanyId], references: [id])
+  toCompany           Company     @relation("IntercompanyTo", fields: [toCompanyId], references: [id])
+  bankAccount         BankAccount @relation("IntercompanySource", fields: [bankAccountId], references: [id])
+  destinationAccount  BankAccount @relation("IntercompanyDestination", fields: [destinationAccountId], references: [id])
+
+  @@unique([bankAccountId, idempotencyKey])
+  @@index([organizationId, status])
+  @@map("intercompany_transfers")
 }
