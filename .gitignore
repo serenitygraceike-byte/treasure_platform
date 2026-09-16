@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Next.js
+.next/
+out/
+next-env.d.ts
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Prisma
+prisma/migrations/dev.db
+generated/
+
+# Testing
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Playwright / scratch artifacts from earlier exploration
+.playwright-mcp/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Artifacts from the previous (superseded) MVP concept — not part of this
+# repository's architecture, kept on disk but out of version control here.
+landing_desktop_full.png
+landing_mobile.png
+payoutos_sprint_report.pdf
+mvp_group_treasury_project_orchestration_spec_v4_multilingual.md
+Итоговый_анализ_MVP_международного_платежного_сервиса.pdf

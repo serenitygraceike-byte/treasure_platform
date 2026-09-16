@@ -1,0 +1,264 @@
+// Example application-domain schema.
+// Better Auth's current schema should be generated using its CLI/adapter
+// and then integrated with this domain schema rather than copied blindly.
+//
+// Recommended workflow:
+// 1. configure Better Auth with PostgreSQL
+// 2. generate its schema using the Better Auth CLI
+// 3. merge/extend the generated schema with these domain models
+// 4. create a single controlled Prisma migration
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CompanyStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+enum PaymentStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  PROCESSING
+  SENT
+  SETTLED
+  REJECTED
+  FAILED
+  CANCELLED
+  REVERSED
+}
+
+enum PaymentType {
+  INTERCOMPANY
+  FREELANCER
+  SUPPLIER
+  TAX
+  OPERATING_EXPENSE
+  CRYPTO
+  OTHER
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CRYPTO_EXCHANGE
+  CARD_PAYOUT
+  MANUAL
+}
+
+model Organization {
+  id           String    @id @default(uuid())
+  name         String
+  baseCurrency String    @db.Char(3)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  companies    Company[]
+  memberships  Membership[]
+}
+
+model Company {
+  id                 String              @id @default(uuid())
+  organizationId     String
+  legalName          String
+  countryCode        String              @db.Char(2)
+  registrationNumber String?
+  taxIdentifier      String?
+  baseCurrency       String              @db.Char(3)
+  status             CompanyStatus       @default(ACTIVE)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  organization       Organization        @relation(fields: [organizationId], references: [id])
+  bankAccounts       BankAccount[]
+  payments           Payment[]
+  expenses           Expense[]
+  outgoingTransfers  IntercompanyTransfer[] @relation("FromCompany")
+  incomingTransfers  IntercompanyTransfer[] @relation("ToCompany")
+
+  @@index([organizationId])
+  @@unique([organizationId, legalName])
+}
+
+model Membership {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  role           String
+  createdAt      DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, userId])
+}
+
+model BankAccount {
+  id                  String   @id @default(uuid())
+  companyId           String
+  providerId          String?
+  name                String
+  bankName            String
+  iban                String?
+  accountNumberLast4  String?
+  currency            String
+  status              String
+  ledgerAccountAddress String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  company             Company  @relation(fields: [companyId], references: [id])
+  payments            Payment[]
+
+  @@index([companyId])
+}
+
+model Counterparty {
+  id                 String   @id @default(uuid())
+  organizationId     String
+  legalName          String
+  type               String
+  countryCode        String?
+  registrationNumber String?
+  taxIdentifier      String?
+  externalReference  String?
+  status             String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  payments           Payment[]
+  expenses           Expense[]
+}
+
+model Payment {
+  id                  String        @id @default(uuid())
+  organizationId      String
+  companyId           String
+  counterpartyId      String?
+  amount              Decimal       @db.Decimal(20, 8)
+  currency            String
+  paymentType         PaymentType
+  paymentMethod       PaymentMethod
+  status              PaymentStatus  @default(DRAFT)
+  idempotencyKey      String
+  providerId          String?
+  providerPaymentId   String?
+  ledgerTransactionId String?
+  requestedBy         String
+  approvedBy          String?
+  requestedAt         DateTime      @default(now())
+  approvedAt          DateTime?
+  executedAt          DateTime?
+  settledAt           DateTime?
+  failureCode         String?
+  failureReason       String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  company             Company       @relation(fields: [companyId], references: [id])
+  counterparty        Counterparty? @relation(fields: [counterpartyId], references: [id])
+
+  @@unique([companyId, idempotencyKey])
+  @@index([organizationId, status])
+  @@index([companyId, createdAt])
+}
+
+model IntercompanyTransfer {
+  id             String   @id @default(uuid())
+  organizationId String
+  fromCompanyId  String
+  toCompanyId    String
+  paymentId      String   @unique
+  amount         Decimal  @db.Decimal(20, 8)
+  currency       String
+  purpose        String?
+  status         String
+  dueAt          DateTime?
+  sentAt         DateTime?
+  receivedAt     DateTime?
+  reconciledAt   DateTime?
+
+  fromCompany    Company  @relation("FromCompany", fields: [fromCompanyId], references: [id])
+  toCompany      Company  @relation("ToCompany", fields: [toCompanyId], references: [id])
+  payment        Payment  @relation(fields: [paymentId], references: [id])
+
+  @@index([fromCompanyId, status])
+  @@index([toCompanyId, status])
+}
+
+model ExpenseCategory {
+  id             String  @id @default(uuid())
+  organizationId String
+  code           String
+  name           String
+  parentId       String?
+
+  expenses       Expense[]
+
+  @@unique([organizationId, code])
+}
+
+model Expense {
+  id             String          @id @default(uuid())
+  organizationId String
+  companyId      String
+  categoryId     String
+  counterpartyId String?
+  amount         Decimal         @db.Decimal(20, 8)
+  currency       String
+  recurrence     String?
+  dueDate        DateTime?
+  status         String
+  budgetAmount   Decimal?        @db.Decimal(20, 8)
+  paymentId      String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  company        Company         @relation(fields: [companyId], references: [id])
+  category       ExpenseCategory @relation(fields: [categoryId], references: [id])
+  counterparty   Counterparty?   @relation(fields: [counterpartyId], references: [id])
+
+  @@index([companyId, dueDate])
+}
+
+model Freelancer {
+  id             String   @id @default(uuid())
+  organizationId String
+  legalName      String
+  countryCode    String?
+  email          String?
+  payoutMethod   String
+  status         String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  contracts      Contract[]
+}
+
+model Contract {
+  id             String      @id @default(uuid())
+  organizationId String
+  companyId      String
+  freelancerId   String?
+  contractNumber String
+  startDate      DateTime
+  endDate        DateTime?
+  scope          String
+  rate           Decimal     @db.Decimal(20, 8)
+  currency       String
+  paymentTerms   String
+  status         String
+  signatureStatus String
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  freelancer     Freelancer? @relation(fields: [freelancerId], references: [id])
+
+  @@index([companyId, status])
+}

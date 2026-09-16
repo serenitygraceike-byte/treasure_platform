@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: treasury
+      POSTGRES_PASSWORD: treasury_dev_only
+      POSTGRES_DB: treasury
+    ports:
+      - "5432:5432"
+    volumes:
+      - treasury_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U treasury -d treasury"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://treasury:treasury_dev_only@postgres:5432/treasury
+      BETTER_AUTH_SECRET: dev_only_not_for_production_00000000000000
+      BETTER_AUTH_URL: http://localhost:3000
+      APP_URL: http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+
+volumes:
+  treasury_postgres_data:
