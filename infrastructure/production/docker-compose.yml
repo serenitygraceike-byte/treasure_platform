@@ -19,6 +19,49 @@ services:
     mem_limit: 512m
     # No published port — reachable only from the internal network.
 
+  # docs/02-LEDGER-SPEC.md: financial core, its own Postgres, isolated from
+  # the app database. No published port — only `web` reaches it, over the
+  # internal network.
+  formance-postgres:
+    image: postgres:16-alpine
+    container_name: treasury-formance-postgres
+    restart: unless-stopped
+    env_file: ../../.env
+    environment:
+      POSTGRES_USER: ${FORMANCE_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${FORMANCE_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${FORMANCE_POSTGRES_DB}
+    volumes:
+      - treasury_formance_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FORMANCE_POSTGRES_USER} -d ${FORMANCE_POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [internal]
+    mem_limit: 384m
+
+  # docs/04-DEPLOYMENT-SPEC.md Model B: plain Docker, not the officially
+  # "supported" Kubernetes-operator production path — a deliberate,
+  # documented risk acceptance for this MVP's traffic/budget, not an
+  # accident (see infrastructure/production/README.md).
+  formance-ledger:
+    image: ghcr.io/formancehq/ledger:v2.4.12
+    container_name: treasury-formance-ledger
+    restart: unless-stopped
+    environment:
+      DEBUG: "false"
+      POSTGRES_URI: postgresql://${FORMANCE_POSTGRES_USER}:${FORMANCE_POSTGRES_PASSWORD}@formance-postgres/${FORMANCE_POSTGRES_DB}?sslmode=disable
+      AUTO_UPGRADE: "true"
+    env_file: ../../.env
+    depends_on:
+      formance-postgres:
+        condition: service_healthy
+    networks: [internal]
+    mem_limit: 384m
+    # No published port — reachable only as http://formance-ledger:3068
+    # from the internal network (web's FORMANCE_BASE_URL in .env).
+
   web:
     build:
       context: ../..
@@ -29,6 +72,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      formance-ledger:
+        condition: service_started
     networks: [internal]
     mem_limit: 512m
     # No published port — Caddy is the only public entry point.
@@ -70,5 +115,6 @@ networks:
 
 volumes:
   treasury_pgdata:
+  treasury_formance_pgdata:
   caddy_data:
   caddy_config:
