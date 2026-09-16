@@ -225,7 +225,77 @@ model BankAccount {
   updatedAt            DateTime          @updatedAt
 
   company              Company @relation(fields: [companyId], references: [id])
+  reservations         BankReservation[]
+  transfersOut         BankTransfer[]    @relation("SourceAccount")
+  transfersIn          BankTransfer[]    @relation("DestinationAccount")
 
   @@index([companyId])
   @@map("bank_accounts")
+}
+
+enum ReservationStatus {
+  ACTIVE
+  RELEASED
+}
+
+// Reserve/release move funds within one bank account's own ledger
+// accounts (bank <-> reserved) — see lib/ledger/postings.ts patterns A/B.
+// This row is a traceable pointer, not the balance itself (architecture
+// freeze rule 4/5) — the ledgerTransactionId columns reference Formance.
+model BankReservation {
+  id                         String            @id @default(uuid())
+  organizationId             String
+  companyId                  String
+  bankAccountId               String
+  amount                     Decimal           @db.Decimal(20, 8)
+  currency                   String            @db.Char(3)
+  status                     ReservationStatus @default(ACTIVE)
+  ledgerTransactionId        String // reserveFunds() result
+  releaseLedgerTransactionId String? // releaseReservation() result, once released
+  idempotencyKey             String
+  correlationId              String
+  requestedBy                String // Better Auth user id, plain column (see schema header note)
+  requestedAt                DateTime          @default(now())
+  releasedAt                 DateTime?
+
+  bankAccount                BankAccount @relation(fields: [bankAccountId], references: [id])
+
+  @@unique([bankAccountId, idempotencyKey])
+  @@index([companyId, status])
+  @@map("bank_reservations")
+}
+
+enum TransferStatus {
+  IN_TRANSIT
+  SETTLED
+}
+
+// Start/settle move funds bank -> in_transit -> destination bank account
+// (lib/ledger/postings.ts patterns C/D). Phase 3 scope: destinationAccountId
+// must be another BankAccount of the *same* company (validated in
+// lib/treasury/transfers.ts) -- cross-company movement is Phase 4
+// "Intercompany", not this phase.
+model BankTransfer {
+  id                         String         @id @default(uuid())
+  organizationId             String
+  companyId                  String
+  bankAccountId              String // source
+  destinationAccountId       String
+  amount                     Decimal        @db.Decimal(20, 8)
+  currency                   String         @db.Char(3)
+  status                     TransferStatus @default(IN_TRANSIT)
+  startLedgerTransactionId   String // startTransfer() result
+  settleLedgerTransactionId  String? // settleTransfer() result, once settled
+  idempotencyKey             String // for the start call; settle derives its own key from this row's id
+  correlationId              String
+  requestedBy                String
+  requestedAt                DateTime       @default(now())
+  settledAt                  DateTime?
+
+  bankAccount                BankAccount @relation("SourceAccount", fields: [bankAccountId], references: [id])
+  destinationAccount         BankAccount @relation("DestinationAccount", fields: [destinationAccountId], references: [id])
+
+  @@unique([bankAccountId, idempotencyKey])
+  @@index([companyId, status])
+  @@map("bank_transfers")
 }
