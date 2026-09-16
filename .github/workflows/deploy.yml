@@ -19,6 +19,20 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      # TEMPORARY diagnostic step — prints only the key's fingerprint,
+      # never the key itself, to confirm DEPLOY_SSH_KEY reached this job
+      # intact. Compare against `ssh-keygen -lf ~/.ssh/gha_deploy.pub` on
+      # the VPS (expected: SHA256:MiOtXX3JD+au5hsuM8LUjIofDTnndVJNgCznilUI+K4).
+      # Remove this step once auth is confirmed working.
+      - name: Debug -- fingerprint the received deploy key
+        run: |
+          echo "host is set: $([ -n "${{ secrets.DEPLOY_HOST }}" ] && echo yes || echo no)"
+          echo "username is set: $([ -n "${{ secrets.DEPLOY_USER }}" ] && echo yes || echo no)"
+          echo "key line count: $(printf '%s' "${{ secrets.DEPLOY_SSH_KEY }}" | wc -l)"
+          printf '%s' "${{ secrets.DEPLOY_SSH_KEY }}" > /tmp/k
+          ssh-keygen -lf /tmp/k || echo "ssh-keygen could not parse the key -- it is malformed"
+          rm -f /tmp/k
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1
         with:
