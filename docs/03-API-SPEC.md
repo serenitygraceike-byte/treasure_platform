@@ -22,6 +22,31 @@ Base path:
 - POST `/companies/:id/bank-accounts`
 - PATCH `/bank-accounts/:id`
 
+## Reservations (Phase 3 — not in the original spec)
+
+- POST `/bank-accounts/:id/reservations`
+- POST `/reservations/:id/release`
+- GET `/companies/:id/reservations`
+
+Reserve/release move funds within one bank account's own ledger accounts
+(`docs/02-LEDGER-SPEC.md` posting patterns A/B). `POST .../reservations`
+requires an `Idempotency-Key` header. `POST .../release` needs none — a
+reservation can only leave `ACTIVE` once, so repeating the call is
+already safe by status, not by a client-supplied key.
+
+## Transfers (Phase 3 — not in the original spec)
+
+- POST `/bank-accounts/:id/transfers`
+- POST `/transfers/:id/settle`
+- GET `/companies/:id/transfers`
+
+Start/settle move funds `bank -> in_transit -> destination` (posting
+patterns C/D). Scope: `destinationAccountId` must be another bank
+account of the *same* company — cross-company movement is Phase 4
+"Intercompany", not this. `POST .../transfers` requires an
+`Idempotency-Key` header; `POST .../settle` needs none, same reasoning
+as reservation release.
+
 ## Transactions
 
 - GET `/transactions`

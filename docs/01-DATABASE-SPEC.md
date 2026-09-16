@@ -112,6 +112,48 @@ Unique:
 
 Do not store full credentials here.
 
+### bank_reservations (Phase 3 — not in the original spec)
+
+- id UUID PK
+- organization_id FK
+- company_id FK
+- bank_account_id FK
+- amount NUMERIC(20,8)
+- currency CHAR(3)
+- status (ACTIVE, RELEASED)
+- ledger_transaction_id — Formance transaction id for the reserve posting
+- release_ledger_transaction_id nullable — set once released
+- idempotency_key
+- correlation_id
+- requested_by
+- requested_at
+- released_at nullable
+
+Unique: `(bank_account_id, idempotency_key)`
+
+Not a balance — `docs/00-ARCHITECTURE-FREEZE.md` rule 4/5. A pointer
+into Formance Ledger, same role `payments.ledger_transaction_id` plays.
+
+### bank_transfers (Phase 3 — not in the original spec)
+
+- id UUID PK
+- organization_id FK
+- company_id FK
+- bank_account_id FK (source)
+- destination_account_id FK (another bank_accounts row, same company — Phase 3 does not model intercompany/counterparty destinations, that is Phase 4)
+- amount NUMERIC(20,8)
+- currency CHAR(3)
+- status (IN_TRANSIT, SETTLED)
+- start_ledger_transaction_id
+- settle_ledger_transaction_id nullable
+- idempotency_key
+- correlation_id
+- requested_by
+- requested_at
+- settled_at nullable
+
+Unique: `(bank_account_id, idempotency_key)`
+
 ### counterparties
 
 - id UUID PK
