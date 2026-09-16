@@ -83,11 +83,11 @@ model Verification {
 // ---------------------------------------------------------------------
 // Phase 1 domain models — docs/01-DATABASE-SPEC.md, scoped to what
 // docs/05-MVP-ROADMAP.md Phase 1 actually asks for: organization,
-// companies, users, memberships, RBAC, company access. Bank accounts,
-// payments, expenses, contracts and freelancers belong to later phases
-// and are intentionally not added yet, even though
-// prisma/schema.prisma.example sketches them — adding them now would be
-// scope creep ahead of their own vertical slice.
+// companies, users, memberships, RBAC, company access. Payments,
+// expenses, contracts and freelancers belong to later phases and are
+// intentionally not added yet, even though prisma/schema.prisma.example
+// sketches them — adding them now would be scope creep ahead of their
+// own vertical slice. Bank accounts were added in Phase 3, below.
 // ---------------------------------------------------------------------
 
 // docs/07-SECURITY-AND-AUDIT.md "Authorization" — fixed role set, shared
@@ -135,6 +135,7 @@ model Company {
 
   organization       Organization        @relation(fields: [organizationId], references: [id])
   companyMemberships CompanyMembership[]
+  bankAccounts       BankAccount[]
 
   @@unique([organizationId, legalName])
   @@index([organizationId])
@@ -190,4 +191,41 @@ model AuditEvent {
 
   @@index([organizationId, createdAt])
   @@map("audit_events")
+}
+
+// ---------------------------------------------------------------------
+// Phase 3 domain models — docs/05-MVP-ROADMAP.md "Treasury": bank
+// accounts, reservations, in-transit transfers. bank_reservations and
+// bank_transfers are not in docs/01-DATABASE-SPEC.md (it only defines
+// bank_accounts) — added here as app-DB pointers into Formance Ledger
+// transactions (never the source of truth for a balance), the same
+// pattern prisma/schema.prisma.example already uses for
+// Payment.ledgerTransactionId. See docs/01-DATABASE-SPEC.md's own
+// updated table list for the rationale.
+// ---------------------------------------------------------------------
+
+enum BankAccountStatus {
+  ACTIVE
+  INACTIVE
+  CLOSED
+}
+
+model BankAccount {
+  id                   String            @id @default(uuid())
+  companyId            String
+  providerId           String? // Phase 6+ (real providers) — no Provider table yet
+  name                 String
+  bankName             String
+  iban                 String?
+  accountNumberLast4   String?
+  currency             String            @db.Char(3)
+  status               BankAccountStatus @default(ACTIVE)
+  ledgerAccountAddress String // lib/ledger/accounts.ts bankAddress(), computed once at creation
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  company              Company @relation(fields: [companyId], references: [id])
+
+  @@index([companyId])
+  @@map("bank_accounts")
 }

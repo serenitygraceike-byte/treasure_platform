@@ -32,6 +32,9 @@ Thumbs.db
 !.vscode/extensions.json
 .idea/
 
+# Claude Code local session state
+.claude/
+
 # Playwright / scratch artifacts from earlier exploration
 .playwright-mcp/
 

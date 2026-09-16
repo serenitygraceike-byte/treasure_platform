@@ -30,3 +30,21 @@ export async function canAccessCompany(
   });
   return !!companyMembership;
 }
+
+// docs/05-MVP-ROADMAP.md Phase 3: money-moving actions (bank accounts,
+// reservations, transfers) require a treasury role, not just company
+// access — read access (canAccessCompany) stays open to VIEWER etc.
+const TREASURY_MANAGER_ROLES: OrgRole[] = ["OWNER", "ADMIN", "TREASURY_MANAGER"];
+
+export async function canManageTreasury(
+  companyId: string,
+  organizationId: string,
+  userId: string
+) {
+  const membership = await getOrgMembership(organizationId, userId);
+  if (membership && TREASURY_MANAGER_ROLES.includes(membership.role)) return true;
+  const companyMembership = await prisma.companyMembership.findUnique({
+    where: { companyId_userId: { companyId, userId } },
+  });
+  return !!companyMembership && TREASURY_MANAGER_ROLES.includes(companyMembership.role);
+}
