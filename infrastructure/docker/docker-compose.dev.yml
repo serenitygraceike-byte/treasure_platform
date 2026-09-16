@@ -16,6 +16,36 @@ services:
       timeout: 5s
       retries: 20
 
+  formance-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger_dev_only
+      POSTGRES_DB: ledger
+    volumes:
+      - treasury_formance_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # docs/02-LEDGER-SPEC.md: pinned to the stable release recorded in
+  # docs/10-DECISIONS.md (Decision 5) — do not track `latest`.
+  formance-ledger:
+    image: ghcr.io/formancehq/ledger:v2.4.12
+    restart: unless-stopped
+    environment:
+      DEBUG: "false"
+      POSTGRES_URI: postgresql://ledger:ledger_dev_only@formance-postgres/ledger?sslmode=disable
+      AUTO_UPGRADE: "true"
+    depends_on:
+      formance-postgres:
+        condition: service_healthy
+    ports:
+      - "3068:3068"
+
   web:
     build:
       context: ../..
@@ -26,11 +56,16 @@ services:
       BETTER_AUTH_SECRET: dev_only_not_for_production_00000000000000
       BETTER_AUTH_URL: http://localhost:3000
       APP_URL: http://localhost:3000
+      FORMANCE_BASE_URL: http://formance-ledger:3068
+      FORMANCE_STACK: treasury-dev
     depends_on:
       postgres:
         condition: service_healthy
+      formance-ledger:
+        condition: service_started
     ports:
       - "3000:3000"
 
 volumes:
   treasury_postgres_data:
+  treasury_formance_postgres_data:

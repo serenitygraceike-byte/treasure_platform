@@ -182,3 +182,16 @@ Therefore:
 - do not improvise an unsupported production Formance deployment
 
 This deployment decision must be made before production money is processed.
+
+## Implementation notes (Phase 2)
+
+- Code lives at `lib/ledger/` (`client.ts`, `accounts.ts`, `postings.ts`, `money.ts`, `errors.ts`, `idempotency.ts`, `service.ts`), not `packages/ledger/` as first sketched above — the repo has no `packages/` workspace, and Phase 0/1 already put every adapter under `lib/`. Same sub-areas, flat files instead of a nested package.
+- No third-party Formance SDK dependency — `lib/ledger/client.ts` is a small typed `fetch` wrapper against the v2 REST API, since no vetted TypeScript/Node SDK exists (only Go/Python are officially published).
+- One Formance ledger per app instance, named by `FORMANCE_STACK` (`treasury-dev` locally). All organizations/companies share it, namespaced through the account address, so no per-tenant ledger provisioning exists.
+- Local dev pins `ghcr.io/formancehq/ledger:v2.4.12` (Decision 5, `docs/10-DECISIONS.md`) via `infrastructure/docker/docker-compose.dev.yml`, with its own Postgres instance separate from the app database.
+- Account addresses: UUIDs contain hyphens, which are not valid in a Formance address (`^\w+(:\w+)*$`), so every id segment is sanitized (hyphens stripped) before being joined — see `lib/ledger/accounts.ts`.
+- Asset precision (decimal places converted to/from Formance's integer minor units) is a fixed table in `lib/ledger/money.ts`: EUR/USD/RSD = 2, USDT/USDC = 6. Add new assets there, not ad hoc at call sites.
+- Idempotency: `lib/ledger/service.ts` requires an idempotency key on every money-moving call and passes it straight through as Formance's native `Idempotency-Key` header — no separate idempotency store in the app database, since Formance already guarantees "same key ⇒ same result".
+- No API routes and no `logAudit` calls were added in this phase — Phase 2's acceptance criteria are library-level. Audit coverage for ledger operations arrives with the Phase 3+ routes that call `lib/ledger/service.ts`, the same way `app/api/v1/companies/route.ts` pairs Prisma writes with `logAudit` today.
+- **Found by live smoke-testing against v2.4.12, not in the published docs**: `GET /v2/{ledger}/accounts/{address}` omits `volumes` entirely unless called with `?expand=volumes` — Formance's own example response shows `volumes` unconditionally, which does not match this version's actual behavior. `lib/ledger/client.ts`'s `getAccount()` always passes `expand=volumes`; `FormanceAccount.volumes` is typed optional and `lib/ledger/service.ts`'s `getAccountBalance()` defaults a missing volume to zero, in case a future version reintroduces the same omission for an unfunded account.
+- Deployed to production 2026-09-16 (`infrastructure/production/docker-compose.yml`, ledger name `treasury-prod`) and smoke-tested end-to-end against the real instance: ledger creation, `world → smoketest:bank` funding, `smoketest:bank → smoketest:reserved` reservation, a repeated `Idempotency-Key` (confirmed `Idempotency-Hit: true`, no double posting), and balance reads. The `smoketest:*` accounts are harmless leftover test data (won't collide with the `org:...:company:...` address convention) — left in place as a working proof rather than reset.
