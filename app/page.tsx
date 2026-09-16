@@ -1,8 +1,14 @@
 export default function HomePage() {
   return (
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: "2rem" }}>
-      <h1>Treasury Platform</h1>
-      <p>Phase 0 skeleton. See /api/health and /api/ready.</p>
+    <main className="p-8">
+      <h1 className="text-xl font-semibold">Treasury Platform</h1>
+      <p className="mt-2 text-neutral-600">
+        See <code>/api/health</code> and <code>/api/ready</code>, or{" "}
+        <a href="/dashboard" className="text-blue-600 underline">
+          go to the dashboard
+        </a>
+        .
+      </p>
     </main>
   );
 }
