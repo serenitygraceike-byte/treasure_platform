@@ -7,14 +7,22 @@ import { getBankAccountBalance } from "@/lib/treasury/balances";
 import { listReservations } from "@/lib/treasury/reservations";
 import { listTransfers } from "@/lib/treasury/transfers";
 import { listIntercompanyTransfers } from "@/lib/treasury/intercompany";
+import { canApproveExpense, canManageExpenses } from "@/lib/rbac";
+import { listExpenseCategories } from "@/lib/expenses/categories";
+import { listExpenses } from "@/lib/expenses/expenses";
+import { getActualVsBudget, listBudgets } from "@/lib/expenses/budgets";
 import {
   addBankAccountAction,
+  addExpenseAction,
+  addExpenseCategoryAction,
+  approveExpenseAction,
   approveIntercompanyTransferAction,
   initiateIntercompanyTransferAction,
   reconcileIntercompanyTransferAction,
   rejectIntercompanyTransferAction,
   releaseReservationAction,
   reserveFundsAction,
+  setBudgetAction,
   settleTransferAction,
   startTransferAction,
 } from "./actions";
@@ -56,15 +64,39 @@ export default async function DashboardPage({
   const company =
     companies.find((c) => c.id === requestedCompanyId) ?? companies[0]!;
 
-  const [bankAccounts, reservations, transfers, intercompanyTransfers, canManage, canApprove] =
-    await Promise.all([
-      listBankAccounts(company.id),
-      listReservations(company.id),
-      listTransfers(company.id),
-      listIntercompanyTransfers(company.id),
-      canManageTreasury(company.id, company.organizationId, user.id),
-      canApproveIntercompany(company.organizationId, user.id),
-    ]);
+  const now = new Date();
+  const periodYear = now.getUTCFullYear();
+  const periodMonth = now.getUTCMonth() + 1;
+
+  const [
+    bankAccounts,
+    reservations,
+    transfers,
+    intercompanyTransfers,
+    canManage,
+    canApprove,
+    expenseCategories,
+    expenses,
+    budgets,
+    actualVsBudget,
+    canManageOpex,
+    canApproveOpex,
+  ] = await Promise.all([
+    listBankAccounts(company.id),
+    listReservations(company.id),
+    listTransfers(company.id),
+    listIntercompanyTransfers(company.id),
+    canManageTreasury(company.id, company.organizationId, user.id),
+    canApproveIntercompany(company.organizationId, user.id),
+    listExpenseCategories(company.organizationId),
+    listExpenses(company.id),
+    listBudgets(company.id, periodYear, periodMonth),
+    getActualVsBudget(company.id, periodYear, periodMonth),
+    canManageExpenses(company.id, company.organizationId, user.id),
+    canApproveExpense(company.id, company.organizationId, user.id),
+  ]);
+  const categoryNameById = new Map(expenseCategories.map((c) => [c.id, c.name]));
+  const budgetedCategoryIds = new Set(budgets.map((b) => b.categoryId));
 
   // Every company in the org, for counterparty names and the destination
   // picker -- not just `companies` (the ones *this user* can see), since
@@ -388,6 +420,185 @@ export default async function DashboardPage({
             </label>
             <button type="submit" className="rounded bg-neutral-900 px-3 py-1 text-white">
               Request transfer
+            </button>
+          </form>
+        ) : null}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="font-semibold">Expense categories</h2>
+        <p className="text-sm text-neutral-500">
+          {expenseCategories.map((c) => c.name).join(", ") || "No categories yet."}
+        </p>
+
+        {canManageOpex ? (
+          <form action={addExpenseCategoryAction} className="flex flex-wrap items-end gap-2 text-sm">
+            <input type="hidden" name="companyId" value={company.id} />
+            <label className="flex flex-col gap-1">
+              Code
+              <input name="code" required className="rounded border border-neutral-300 px-2 py-1" />
+            </label>
+            <label className="flex flex-col gap-1">
+              Name
+              <input name="name" required className="rounded border border-neutral-300 px-2 py-1" />
+            </label>
+            <button type="submit" className="rounded bg-neutral-900 px-3 py-1 text-white">
+              Add category
+            </button>
+          </form>
+        ) : null}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="font-semibold">Expenses</h2>
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-neutral-200">
+              <th className="py-1">Category</th>
+              <th>Amount</th>
+              <th>Due</th>
+              <th>Recurrence</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {expenses.map((e) => (
+              <tr key={e.id} className="border-b border-neutral-100">
+                <td className="py-1">{categoryNameById.get(e.categoryId) ?? "Unknown category"}</td>
+                <td>
+                  {e.amount.toString()} {e.currency}
+                </td>
+                <td>{e.dueDate.toISOString().slice(0, 10)}</td>
+                <td>{e.recurrence}</td>
+                <td>{e.status}</td>
+                <td>
+                  {canApproveOpex && e.status === "PENDING_APPROVAL" ? (
+                    <form action={approveExpenseAction}>
+                      <input type="hidden" name="companyId" value={company.id} />
+                      <input type="hidden" name="expenseId" value={e.id} />
+                      <button type="submit" className="text-blue-600 underline">
+                        Approve
+                      </button>
+                    </form>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {canManageOpex && expenseCategories.length > 0 ? (
+          <form action={addExpenseAction} className="flex flex-wrap items-end gap-2 text-sm">
+            <input type="hidden" name="companyId" value={company.id} />
+            <label className="flex flex-col gap-1">
+              Category
+              <select name="categoryId" className="rounded border border-neutral-300 px-2 py-1">
+                {expenseCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Amount
+              <input name="amount" required placeholder="0.00" className="rounded border border-neutral-300 px-2 py-1" />
+            </label>
+            <label className="flex flex-col gap-1">
+              Currency
+              <select name="currency" className="rounded border border-neutral-300 px-2 py-1">
+                {ASSETS.map((asset) => (
+                  <option key={asset} value={asset}>
+                    {asset}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Due date
+              <input type="date" name="dueDate" required className="rounded border border-neutral-300 px-2 py-1" />
+            </label>
+            <label className="flex flex-col gap-1">
+              Recurrence
+              <select name="recurrence" className="rounded border border-neutral-300 px-2 py-1">
+                {["ONE_OFF", "WEEKLY", "MONTHLY", "QUARTERLY", "YEARLY"].map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="submit" className="rounded bg-neutral-900 px-3 py-1 text-white">
+              Record expense
+            </button>
+          </form>
+        ) : null}
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <h2 className="font-semibold">
+          Budgets — {periodYear}-{String(periodMonth).padStart(2, "0")}
+        </h2>
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-neutral-200">
+              <th className="py-1">Category</th>
+              <th>Budget</th>
+              <th>Actual</th>
+              <th>Variance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {actualVsBudget.map((row) => (
+              <tr key={row.categoryId} className="border-b border-neutral-100">
+                <td className="py-1">{row.categoryName}</td>
+                <td>
+                  {row.budgetAmount.toString()} {row.currency}
+                </td>
+                <td>
+                  {row.actualAmount.toString()} {row.currency}
+                </td>
+                <td className={row.variance.isNegative() ? "text-red-600" : "text-green-700"}>
+                  {row.variance.toString()} {row.currency}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {canManageOpex && expenseCategories.length > 0 ? (
+          <form action={setBudgetAction} className="flex flex-wrap items-end gap-2 text-sm">
+            <input type="hidden" name="companyId" value={company.id} />
+            <input type="hidden" name="periodYear" value={periodYear} />
+            <input type="hidden" name="periodMonth" value={periodMonth} />
+            <label className="flex flex-col gap-1">
+              Category
+              <select name="categoryId" className="rounded border border-neutral-300 px-2 py-1">
+                {expenseCategories.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                    {budgetedCategoryIds.has(c.id) ? " (set)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1">
+              Amount
+              <input name="amount" required placeholder="0.00" className="rounded border border-neutral-300 px-2 py-1" />
+            </label>
+            <label className="flex flex-col gap-1">
+              Currency
+              <select name="currency" className="rounded border border-neutral-300 px-2 py-1">
+                {ASSETS.map((asset) => (
+                  <option key={asset} value={asset}>
+                    {asset}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="submit" className="rounded bg-neutral-900 px-3 py-1 text-white">
+              Set this month&apos;s budget
             </button>
           </form>
         ) : null}

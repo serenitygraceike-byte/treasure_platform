@@ -117,6 +117,7 @@ model Organization {
   companies    Company[]
   memberships  Membership[]
   auditEvents  AuditEvent[]
+  expenseCategories ExpenseCategory[]
 
   @@map("organizations")
 }
@@ -138,6 +139,8 @@ model Company {
   bankAccounts       BankAccount[]
   intercompanyTransfersOut IntercompanyTransfer[] @relation("IntercompanyFrom")
   intercompanyTransfersIn  IntercompanyTransfer[] @relation("IntercompanyTo")
+  expenses           Expense[]
+  budgets            Budget[]
 
   @@unique([organizationId, legalName])
   @@index([organizationId])
@@ -355,4 +358,109 @@ model IntercompanyTransfer {
   @@unique([bankAccountId, idempotencyKey])
   @@index([organizationId, status])
   @@map("intercompany_transfers")
+}
+
+// ---------------------------------------------------------------------
+// Phase 5 domain models — docs/05-MVP-ROADMAP.md "OPEX": categories,
+// expenses, recurring expenses, budgets, actual vs budget.
+// expense_categories/expenses match docs/01-DATABASE-SPEC.md's column
+// list exactly, with one deliberate deviation: counterpartyId/
+// contractId/paymentId reference tables that don't exist yet (Phase
+// 6/7) -- plain nullable columns with no FK, the same pattern as
+// BankAccount.providerId above. approvedBy/approvedAt are not in the
+// original spec but mirror payments.approved_by/approved_at (the same
+// approval-workflow display need Phase 4 already solved for
+// IntercompanyTransfer.approvedBy) -- see docs/01-DATABASE-SPEC.md's
+// updated notes. recurrence is a label only in this phase: nothing
+// generates future Expense rows from it yet, that's Phase 8 Forecast's
+// job (docs/05-MVP-ROADMAP.md lists "recurring expenses" again there).
+//
+// budgets is a new table (not in the original spec), same "documented
+// pointer/extension" precedent as bank_reservations/bank_transfers/
+// intercompany_transfers in Phase 3/4. Monthly-calendar granularity
+// (companyId, categoryId, periodYear, periodMonth) is a scope decision
+// -- confirmed over a free-form date-range budget for MVP simplicity.
+// ---------------------------------------------------------------------
+
+enum ExpenseRecurrence {
+  ONE_OFF
+  WEEKLY
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum ExpenseStatus {
+  PENDING_APPROVAL
+  APPROVED
+}
+
+model ExpenseCategory {
+  id             String   @id @default(uuid())
+  organizationId String
+  code           String
+  name           String
+  parentId       String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization      @relation(fields: [organizationId], references: [id])
+  parent         ExpenseCategory?  @relation("CategoryParent", fields: [parentId], references: [id])
+  children       ExpenseCategory[] @relation("CategoryParent")
+  expenses       Expense[]
+  budgets        Budget[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId])
+  @@map("expense_categories")
+}
+
+model Expense {
+  id             String            @id @default(uuid())
+  organizationId String
+  companyId      String
+  categoryId     String
+  counterpartyId String? // Phase 6+ (counterparties) -- no Counterparty table yet
+  contractId     String? // Phase 7+ (freelancers/contracts) -- no Contract table yet
+  amount         Decimal           @db.Decimal(20, 8)
+  currency       String            @db.Char(3)
+  recurrence     ExpenseRecurrence @default(ONE_OFF)
+  dueDate        DateTime
+  status         ExpenseStatus     @default(PENDING_APPROVAL)
+  budgetAmount   Decimal?          @db.Decimal(20, 8)
+  paymentId      String? // Phase 6+ (payment orchestration) -- no Payment table yet
+  approvedBy     String? // not in original spec -- see header comment
+  approvedAt     DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  company        Company         @relation(fields: [companyId], references: [id])
+  category       ExpenseCategory @relation(fields: [categoryId], references: [id])
+
+  @@index([companyId, status])
+  @@index([companyId, categoryId, dueDate])
+  @@map("expenses")
+}
+
+// Not in docs/01-DATABASE-SPEC.md -- see header comment above. One row
+// per company/category/calendar-month; "actual" is the sum of that
+// same slice's APPROVED expenses (lib/expenses/budgets.ts).
+model Budget {
+  id             String   @id @default(uuid())
+  organizationId String
+  companyId      String
+  categoryId     String
+  periodYear     Int
+  periodMonth    Int // 1-12
+  amount         Decimal  @db.Decimal(20, 8)
+  currency       String   @db.Char(3)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  company        Company         @relation(fields: [companyId], references: [id])
+  category       ExpenseCategory @relation(fields: [categoryId], references: [id])
+
+  @@unique([companyId, categoryId, periodYear, periodMonth])
+  @@index([organizationId])
+  @@map("budgets")
 }

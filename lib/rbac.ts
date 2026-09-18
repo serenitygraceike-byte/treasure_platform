@@ -60,3 +60,41 @@ export async function canApproveIntercompany(organizationId: string, userId: str
   const membership = await getOrgMembership(organizationId, userId);
   return !!membership && INTERCOMPANY_APPROVER_ROLES.includes(membership.role);
 }
+
+// docs/05-MVP-ROADMAP.md Phase 5: OPEX bookkeeping (categories,
+// expenses, budgets) is scoped to one company, so it uses the same
+// dual org/company-level check as canManageTreasury -- ACCOUNTANT is
+// the natural owner of this workflow (docs/07-SECURITY-AND-AUDIT.md's
+// role list), not just a read-only role like it is for treasury.
+const EXPENSE_MANAGER_ROLES: OrgRole[] = ["OWNER", "ADMIN", "ACCOUNTANT"];
+
+export async function canManageExpenses(
+  companyId: string,
+  organizationId: string,
+  userId: string
+) {
+  const membership = await getOrgMembership(organizationId, userId);
+  if (membership && EXPENSE_MANAGER_ROLES.includes(membership.role)) return true;
+  const companyMembership = await prisma.companyMembership.findUnique({
+    where: { companyId_userId: { companyId, userId } },
+  });
+  return !!companyMembership && EXPENSE_MANAGER_ROLES.includes(companyMembership.role);
+}
+
+// Unlike canApproveIntercompany, expense approval never spans two
+// companies -- so it stays company-scoped, same dual-level check as
+// canManageTreasury, just with the approver-tier role set.
+const EXPENSE_APPROVER_ROLES: OrgRole[] = ["OWNER", "ADMIN", "APPROVER"];
+
+export async function canApproveExpense(
+  companyId: string,
+  organizationId: string,
+  userId: string
+) {
+  const membership = await getOrgMembership(organizationId, userId);
+  if (membership && EXPENSE_APPROVER_ROLES.includes(membership.role)) return true;
+  const companyMembership = await prisma.companyMembership.findUnique({
+    where: { companyId_userId: { companyId, userId } },
+  });
+  return !!companyMembership && EXPENSE_APPROVER_ROLES.includes(companyMembership.role);
+}

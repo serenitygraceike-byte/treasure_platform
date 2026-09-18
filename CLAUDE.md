@@ -16,6 +16,7 @@ Before changing code, read:
 4. `/docs/03-API-SPEC.md`
 5. `/docs/04-DEPLOYMENT-SPEC.md`
 6. `/docs/05-MVP-ROADMAP.md`
+7. `/docs/11-DEPLOYMENT-WORKFLOW.md`
 
 Read the relevant module document before implementing that module.
 
@@ -38,6 +39,7 @@ Read the relevant module document before implementing that module.
 15. Every important financial mutation requires an audit event.
 16. Database migrations must be reversible or have a documented recovery strategy.
 17. Do not mix accounting/statutory tax logic into treasury logic without a separate specification.
+18. A phase is not complete until it is deployed to the production server and verified there, per `/docs/11-DEPLOYMENT-WORKFLOW.md`. Passing local tests is necessary, not sufficient.
 
 ## Development order
 
@@ -53,6 +55,7 @@ Each completed slice must include:
 - tests
 - audit events where applicable
 - documentation update
+- deployment to production and verification (`/docs/11-DEPLOYMENT-WORKFLOW.md`)
 
 ## Agent behavior
 

@@ -20,6 +20,12 @@ import {
   rejectIntercompanyTransfer,
 } from "@/lib/treasury/intercompany";
 import { LedgerError } from "@/lib/ledger/errors";
+import { canApproveExpense, canManageExpenses, isOrgManager } from "@/lib/rbac";
+import { createExpenseCategorySchema, createExpenseSchema } from "@/lib/validation/expense";
+import { upsertBudgetSchema } from "@/lib/validation/budget";
+import { createExpenseCategory } from "@/lib/expenses/categories";
+import { approveExpense, createExpense } from "@/lib/expenses/expenses";
+import { upsertBudget } from "@/lib/expenses/budgets";
 
 // Server Actions run as their own request -- getCurrentUser()/RBAC are
 // re-checked here, not inherited from whatever rendered the form. Every
@@ -304,6 +310,142 @@ export async function reconcileIntercompanyTransferAction(formData: FormData) {
     });
   } catch (err) {
     backTo(companyId, err instanceof Error ? err.message : "Could not reconcile the transfer.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+// ---------------------------------------------------------------------
+// Phase 5 — OPEX (docs/05-MVP-ROADMAP.md). Categories are org-scoped
+// (isOrgManager), expenses/budgets are company-scoped (canManageExpenses/
+// canApproveExpense) -- same split as the API routes under
+// app/api/v1/expense-categories and app/api/v1/expenses.
+// ---------------------------------------------------------------------
+
+async function requireExpenseManager(companyId: string) {
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!company) backTo(companyId, "Company not found.");
+
+  if (!(await canManageExpenses(companyId, company.organizationId, user.id))) {
+    backTo(companyId, "Only ACCOUNTANT, ADMIN or OWNER can do that.");
+  }
+
+  return { user, company };
+}
+
+export async function addExpenseCategoryAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!company) backTo(companyId, "Company not found.");
+
+  if (!(await isOrgManager(company.organizationId, user.id))) {
+    backTo(companyId, "Only ADMIN or OWNER can manage expense categories.");
+    return;
+  }
+
+  const parsed = createExpenseCategorySchema.safeParse({
+    code: formData.get("code"),
+    name: formData.get("name"),
+  });
+  if (!parsed.success) {
+    backTo(companyId, parsed.error.issues[0]?.message ?? "Invalid category.");
+    return;
+  }
+
+  await createExpenseCategory(company.organizationId, parsed.data, {
+    actorUserId: user.id,
+    correlationId: crypto.randomUUID(),
+  });
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function addExpenseAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const { user, company } = await requireExpenseManager(companyId);
+
+  const parsed = createExpenseSchema.safeParse({
+    companyId,
+    categoryId: formData.get("categoryId"),
+    amount: formData.get("amount"),
+    currency: formData.get("currency"),
+    recurrence: formData.get("recurrence") || "ONE_OFF",
+    dueDate: formData.get("dueDate"),
+  });
+  if (!parsed.success) {
+    backTo(companyId, parsed.error.issues[0]?.message ?? "Invalid expense.");
+    return;
+  }
+
+  try {
+    await createExpense(company, {
+      ...parsed.data,
+      actorUserId: user.id,
+      correlationId: crypto.randomUUID(),
+    });
+  } catch (err) {
+    backTo(companyId, err instanceof Error ? err.message : "Could not record the expense.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function approveExpenseAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const expenseId = String(formData.get("expenseId"));
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!company) backTo(companyId, "Company not found.");
+
+  if (!(await canApproveExpense(companyId, company.organizationId, user.id))) {
+    backTo(companyId, "Only an APPROVER, ADMIN or OWNER can approve an expense.");
+    return;
+  }
+
+  await approveExpense(expenseId, { actorUserId: user.id, correlationId: crypto.randomUUID() });
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function setBudgetAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const { user, company } = await requireExpenseManager(companyId);
+
+  const now = new Date();
+  const parsed = upsertBudgetSchema.safeParse({
+    categoryId: formData.get("categoryId"),
+    periodYear: formData.get("periodYear") || now.getUTCFullYear(),
+    periodMonth: formData.get("periodMonth") || now.getUTCMonth() + 1,
+    amount: formData.get("amount"),
+    currency: formData.get("currency"),
+  });
+  if (!parsed.success) {
+    backTo(companyId, parsed.error.issues[0]?.message ?? "Invalid budget.");
+    return;
+  }
+
+  try {
+    await upsertBudget(company, {
+      ...parsed.data,
+      actorUserId: user.id,
+      correlationId: crypto.randomUUID(),
+    });
+  } catch (err) {
+    backTo(companyId, err instanceof Error ? err.message : "Could not set the budget.");
     return;
   }
 

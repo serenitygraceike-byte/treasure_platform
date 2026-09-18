@@ -274,8 +274,40 @@ Unique: `(bank_account_id, idempotency_key)`
 - status
 - budget_amount nullable
 - payment_id nullable
+- approved_by nullable — Phase 5, not in the original spec; mirrors
+  `payments.approved_by` for the same approval-workflow display need
+  Phase 4 already solved for `intercompany_transfers.approvedBy`
+- approved_at nullable — Phase 5, pairs with approved_by
 - created_at
 - updated_at
+
+`counterparty_id`/`contract_id`/`payment_id` reference tables that
+don't exist yet (Phase 6/7) — plain columns, no FK, same pattern as
+`bank_accounts.provider_id`. `recurrence` is a label only as of Phase 5:
+nothing generates future `expenses` rows from it — that's Phase 8
+Forecast's job.
+
+### budgets (Phase 5 — not in the original spec)
+
+- id UUID PK
+- organization_id FK
+- company_id FK
+- category_id FK
+- period_year
+- period_month (1-12)
+- amount NUMERIC(20,8)
+- currency CHAR(3)
+- created_at
+- updated_at
+
+Unique: `(company_id, category_id, period_year, period_month)`
+
+One monthly budget line per company/category. Not a balance and not a
+ledger pointer — a plan number the application compares against the
+sum of that period's `APPROVED` expenses (same category, matching
+currency) to produce "actual vs budget". Same "documented
+extension" precedent as `bank_reservations`/`bank_transfers`/
+`intercompany_transfers` in Phase 3/4.
 
 ### freelancers
 
