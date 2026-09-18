@@ -159,12 +159,12 @@ Unique: `(bank_account_id, idempotency_key)`
 - id UUID PK
 - organization_id FK
 - legal_name
-- type
+- type — Phase 6 enum: COMPANY, INDIVIDUAL
 - country_code
 - registration_number nullable
 - tax_identifier nullable
 - external_reference nullable
-- status
+- status — Phase 6 enum: ACTIVE, INACTIVE
 - created_at
 - updated_at
 
@@ -172,41 +172,47 @@ Unique: `(bank_account_id, idempotency_key)`
 
 - id UUID PK
 - counterparty_id FK
-- payment_method
-- payout_details_encrypted
-- status
+- payment_method — Phase 6 enum: BANK_TRANSFER, CRYPTO_EXCHANGE, CARD_PAYOUT, MANUAL (shared with payments.payment_method)
+- payout_details_encrypted — Phase 6: AES-256-GCM at the application layer (lib/crypto/encryption.ts, key from `PAYOUT_ENCRYPTION_KEY`), never returned in plaintext by any read path
+- status — Phase 6 enum: ACTIVE, INACTIVE
 - created_at
 - updated_at
 
 ### providers
 
 - id UUID PK
-- organization_id FK
-- type
+- organization_id FK — NOT NULL: every org gets its own row per provider type, auto-provisioned on first use (lib/providers/registry.ts getOrCreateProvider) rather than a manual "configure a provider" flow — there's nothing to configure for a mock provider
+- type — Phase 6: MOCK_BANK, MOCK_CRYPTO, MOCK_PAYOUT (docs/06-PROVIDER-INTERFACES.md); a real value needs its own provider-specific task per CLAUDE.md rule 13
 - name
-- status
+- status — Phase 6 enum: ACTIVE, INACTIVE
 - configuration_reference
 - created_at
 - updated_at
 
+Unique: `(organization_id, type)`
+
 Provider secrets must be stored in a secret manager or encrypted secret store, not plain database columns.
 
-### payments
+### payments (Phase 6)
 
 - id UUID PK
 - organization_id FK
 - company_id FK
 - beneficiary_id FK
+- counterparty_id nullable — Phase 6, not in the original spec; denormalized from beneficiary_id at creation so a payment doesn't need a beneficiary join to know its counterparty (also the FK lib/ledger/accounts.ts counterpartyAddress() needs at execute time)
+- bank_account_id FK — Phase 6, not in the original spec; the original payments table has no funding-source column, but executePayment must know which BankAccount to debit for the ledger BANK -> IN_TRANSIT posting (docs/02-LEDGER-SPEC.md pattern C). Mirrors intercompany_transfers.bank_account_id
 - provider_id nullable
 - contract_id nullable
 - amount NUMERIC(20,8)
 - currency VARCHAR(20)
 - payment_type
 - payment_method
-- status
+- status (PENDING_APPROVAL, APPROVED, PROCESSING, SETTLED, FAILED, REJECTED, CANCELLED) — trimmed from `prisma/schema.prisma.example`'s 10-state sketch to the 7 states this phase's endpoints actually drive; no DRAFT (POST /payments creates directly at PENDING_APPROVAL, same as intercompany_transfers/expenses), no SENT/REVERSED (not reachable by any endpoint yet)
 - idempotency_key
 - provider_payment_id nullable
-- ledger_transaction_id nullable
+- ledger_transaction_id nullable — startTransfer() result, set on execute
+- settle_ledger_transaction_id nullable — Phase 6, not in the original spec; settleTransfer()/reverseTransfer() result depending on outcome, same pointer-field precedent as bank_transfers.settle_ledger_transaction_id
+- retry_count — Phase 6, not in the original spec; backs the "failure/retry model" roadmap item, capped at 3 in lib/payments/payments.ts
 - requested_by FK
 - approved_by FK nullable
 - requested_at
@@ -379,13 +385,15 @@ extension" precedent as `bank_reservations`/`bank_transfers`/
 - payload_hash
 - received_at
 - processed_at nullable
-- status
+- status — Phase 6 enum: RECEIVED, PROCESSED, IGNORED, ERROR
 - error_message nullable
 
 Unique:
-`(provider_id, external_event_id)`
+`(provider_id, external_event_id)` — Phase 6: the dedup key for CLAUDE.md rule 8. A row already PROCESSED short-circuits as a duplicate; a row stuck at RECEIVED/ERROR is retried in place (lib/providers/webhook.ts).
 
 ### reconciliations
+
+Not implemented as of Phase 6 — docs/05-MVP-ROADMAP.md's Phase 6 bullets (approval workflow, provider interface, mock provider, webhook framework, failure/retry model) don't call for it; reconciliation exceptions arrive with Phase 9's real provider.
 
 - id UUID PK
 - organization_id FK

@@ -52,7 +52,7 @@ as reservation release.
 - GET `/transactions`
 - GET `/transactions/:id`
 
-## Payments
+## Payments (Phase 6)
 
 - POST `/payments`
 - GET `/payments`
@@ -66,6 +66,38 @@ Headers:
 - `Authorization`
 - `Idempotency-Key`
 - `X-Correlation-ID`
+
+`GET /payments` takes a `companyId` query parameter, same pattern as
+`GET /expenses`/`GET /intercompany-transfers`. `POST /payments` requires
+`bankAccountId` and `beneficiaryId` in the body (see "Counterparties"
+below) and an `Idempotency-Key` header; requester role is
+`TREASURY_MANAGER`/`ADMIN`/`OWNER` (`canRequestPayment`). `approve`/
+`reject` require `APPROVER`/`ADMIN`/`OWNER` of that company
+(`canApprovePayment`, company-scoped — unlike intercompany approval, a
+payment never spans two companies). `execute`/`cancel` require
+`TREASURY_MANAGER`/`ADMIN`/`OWNER` (`canManageTreasury`, the same
+money-moving role set as bank transfers) — deliberately a different
+check than approve, per docs/07-SECURITY-AND-AUDIT.md "creator may
+request; approver authorizes; execution occurs only after approval".
+None of the four sub-actions need `Idempotency-Key` (status-transition
+guarded); `execute` is the one exception that's re-callable on purpose —
+calling it again on a `FAILED` payment retries (capped at 3 retries,
+`lib/payments/payments.ts`), each attempt its own ledger idempotency
+key.
+
+## Counterparties (Phase 6 — not in the original spec)
+
+- POST `/counterparties`
+- GET `/counterparties`
+- POST `/counterparties/:id/beneficiaries`
+- GET `/counterparties/:id/beneficiaries`
+
+Org-scoped (`organizationId` body/query param, same split as expense
+categories) — a counterparty and its beneficiaries are shared by every
+company in the organization. Managing either requires an org-level
+`ADMIN`/`OWNER`. A beneficiary's `payoutDetails` is encrypted before
+storage and never returned by any read path (see
+`docs/01-DATABASE-SPEC.md` `beneficiaries`).
 
 ## Intercompany
 
@@ -145,9 +177,19 @@ budget, `canAccessCompany` (read-only) to view either report.
 - GET `/reconciliation/exceptions`
 - POST `/reconciliation/:id/resolve`
 
-## Webhooks
+## Webhooks (Phase 6)
 
 - POST `/webhooks/:provider`
+
+`:provider` is a `providers.id` (UUID), not a type slug — each org's
+auto-provisioned `Provider` row has its own callback URL, so the row id
+is what a real callback would encode; the row's own `type` field then
+picks the verification/adapter logic (`lib/providers/registry.ts`).
+Every delivery is signature-verified and deduplicated by
+`(providerId, externalEventId)` per `CLAUDE.md` rule 8
+(`lib/providers/webhook.ts`) — an invalid signature is still recorded
+(`signatureValid: false`) and returns 401; a duplicate of an
+already-`PROCESSED` event returns 200 without reprocessing.
 
 ## Error format
 

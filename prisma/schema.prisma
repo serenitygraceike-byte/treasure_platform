@@ -118,6 +118,8 @@ model Organization {
   memberships  Membership[]
   auditEvents  AuditEvent[]
   expenseCategories ExpenseCategory[]
+  counterparties Counterparty[]
+  providers      Provider[]
 
   @@map("organizations")
 }
@@ -141,6 +143,7 @@ model Company {
   intercompanyTransfersIn  IntercompanyTransfer[] @relation("IntercompanyTo")
   expenses           Expense[]
   budgets            Budget[]
+  payments           Payment[]
 
   @@unique([organizationId, legalName])
   @@index([organizationId])
@@ -235,6 +238,7 @@ model BankAccount {
   transfersIn          BankTransfer[]    @relation("DestinationAccount")
   intercompanyTransfersOut IntercompanyTransfer[] @relation("IntercompanySource")
   intercompanyTransfersIn  IntercompanyTransfer[] @relation("IntercompanyDestination")
+  payments             Payment[]
 
   @@index([companyId])
   @@map("bank_accounts")
@@ -420,7 +424,7 @@ model Expense {
   organizationId String
   companyId      String
   categoryId     String
-  counterpartyId String? // Phase 6+ (counterparties) -- no Counterparty table yet
+  counterpartyId String? // Phase 6+ real FK now that Counterparty exists (was a plain column in Phase 5)
   contractId     String? // Phase 7+ (freelancers/contracts) -- no Contract table yet
   amount         Decimal           @db.Decimal(20, 8)
   currency       String            @db.Char(3)
@@ -428,7 +432,7 @@ model Expense {
   dueDate        DateTime
   status         ExpenseStatus     @default(PENDING_APPROVAL)
   budgetAmount   Decimal?          @db.Decimal(20, 8)
-  paymentId      String? // Phase 6+ (payment orchestration) -- no Payment table yet
+  paymentId      String? // Phase 6+ real FK now that Payment exists (was a plain column in Phase 5)
   approvedBy     String? // not in original spec -- see header comment
   approvedAt     DateTime?
   createdAt      DateTime          @default(now())
@@ -436,6 +440,8 @@ model Expense {
 
   company        Company         @relation(fields: [companyId], references: [id])
   category       ExpenseCategory @relation(fields: [categoryId], references: [id])
+  counterparty   Counterparty?   @relation(fields: [counterpartyId], references: [id])
+  payment        Payment?        @relation(fields: [paymentId], references: [id])
 
   @@index([companyId, status])
   @@index([companyId, categoryId, dueDate])
@@ -463,4 +469,226 @@ model Budget {
   @@unique([companyId, categoryId, periodYear, periodMonth])
   @@index([organizationId])
   @@map("budgets")
+}
+
+// ---------------------------------------------------------------------
+// Phase 6 domain models — docs/05-MVP-ROADMAP.md "Payment orchestration":
+// approval workflow, provider interface, mock provider, webhook
+// framework, failure/retry model. Tables match docs/01-DATABASE-SPEC.md
+// (counterparties, beneficiaries, providers, payments, webhooks) with
+// documented trims/additions below.
+//
+// PaymentStatus is trimmed from prisma/schema.prisma.example's 10 states
+// to the 7 this phase's endpoints actually drive (no DRAFT -- POST
+// /payments per docs/03-API-SPEC.md creates directly at PENDING_APPROVAL,
+// same as IntercompanyTransfer/Expense; no SENT/REVERSED -- not reachable
+// by any endpoint yet). retryCount is not in the original spec: it backs
+// the roadmap's "failure/retry model" -- POST /payments/:id/execute may
+// be called again on a FAILED payment (lib/payments/payments.ts caps
+// retries), each attempt getting its own ledger idempotency key.
+//
+// providers.organization_id is NOT NULL per docs/01-DATABASE-SPEC.md, so
+// each org gets its own row per provider type, auto-provisioned on first
+// use (lib/providers/registry.ts getOrCreateProvider) rather than a
+// manual "configure a provider" admin flow -- there's nothing to
+// configure for a mock provider, and CLAUDE.md rule 13 rules out real
+// provider setup work not asked for by an explicit task.
+//
+// beneficiaries.payout_details_encrypted is encrypted at the application
+// layer (lib/crypto/encryption.ts, AES-256-GCM, key from
+// PAYOUT_ENCRYPTION_KEY) before it ever reaches this column -- the
+// column name in docs/01-DATABASE-SPEC.md says so explicitly.
+//
+// reconciliations (docs/01-DATABASE-SPEC.md) and SignatureProvider
+// (docs/06-PROVIDER-INTERFACES.md) are deliberately out of scope here --
+// neither is in this phase's roadmap bullets; reconciliation exceptions
+// arrive with Phase 9's real provider, e-signature with Phase 7.
+// ---------------------------------------------------------------------
+
+enum CounterpartyType {
+  COMPANY
+  INDIVIDUAL
+}
+
+enum CounterpartyStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// Shared by Beneficiary.paymentMethod and Payment.paymentMethod --
+// MANUAL means no provider call at all (an offline/manual payment the
+// application just records; see lib/payments/payments.ts executePayment).
+enum PaymentMethod {
+  BANK_TRANSFER
+  CRYPTO_EXCHANGE
+  CARD_PAYOUT
+  MANUAL
+}
+
+enum BeneficiaryStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// MOCK_* only for this phase (docs/06-PROVIDER-INTERFACES.md) -- a real
+// value needs its own provider-specific task (CLAUDE.md rule 13).
+enum ProviderType {
+  MOCK_BANK
+  MOCK_CRYPTO
+  MOCK_PAYOUT
+}
+
+enum ProviderStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum PaymentType {
+  INTERCOMPANY
+  FREELANCER
+  SUPPLIER
+  TAX
+  OPERATING_EXPENSE
+  CRYPTO
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING_APPROVAL
+  APPROVED
+  PROCESSING
+  SETTLED
+  FAILED
+  REJECTED
+  CANCELLED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  ERROR
+}
+
+model Counterparty {
+  id                 String              @id @default(uuid())
+  organizationId     String
+  legalName          String
+  type               CounterpartyType
+  countryCode        String?             @db.Char(2)
+  registrationNumber String?
+  taxIdentifier      String?
+  externalReference  String?
+  status             CounterpartyStatus  @default(ACTIVE)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  organization       Organization @relation(fields: [organizationId], references: [id])
+  beneficiaries      Beneficiary[]
+  payments           Payment[]
+  expenses           Expense[]
+
+  @@index([organizationId])
+  @@map("counterparties")
+}
+
+// payoutDetailsEncrypted holds an opaque ciphertext blob (base64) from
+// lib/crypto/encryption.ts -- never a plaintext IBAN/wallet address.
+model Beneficiary {
+  id                       String            @id @default(uuid())
+  counterpartyId           String
+  paymentMethod            PaymentMethod
+  payoutDetailsEncrypted   String
+  status                   BeneficiaryStatus @default(ACTIVE)
+  createdAt                DateTime          @default(now())
+  updatedAt                DateTime          @updatedAt
+
+  counterparty             Counterparty @relation(fields: [counterpartyId], references: [id])
+  payments                 Payment[]
+
+  @@index([counterpartyId])
+  @@map("beneficiaries")
+}
+
+model Provider {
+  id                     String         @id @default(uuid())
+  organizationId         String
+  type                   ProviderType
+  name                   String
+  status                 ProviderStatus @default(ACTIVE)
+  configurationReference String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  organization           Organization @relation(fields: [organizationId], references: [id])
+  payments               Payment[]
+  webhooks               Webhook[]
+
+  @@unique([organizationId, type])
+  @@map("providers")
+}
+
+model Payment {
+  id                  String        @id @default(uuid())
+  organizationId      String
+  companyId           String
+  beneficiaryId       String
+  counterpartyId      String? // denormalized from beneficiary for query convenience, set at creation
+  providerId          String?
+  bankAccountId       String // not in original spec -- docs/01-DATABASE-SPEC.md's payments table has no funding-source column, but executePayment (lib/payments/payments.ts) must know which BankAccount to debit for the ledger BANK -> IN_TRANSIT posting (docs/02-LEDGER-SPEC.md pattern C); mirrors BankTransfer.bankAccountId
+  contractId          String? // Phase 7+ -- no Contract table yet
+  amount              Decimal       @db.Decimal(20, 8)
+  currency            String        @db.Char(3)
+  paymentType         PaymentType
+  paymentMethod       PaymentMethod
+  status              PaymentStatus @default(PENDING_APPROVAL)
+  idempotencyKey      String
+  providerPaymentId   String?
+  ledgerTransactionId String? // startTransfer() result, set on execute
+  settleLedgerTransactionId String? // settleTransfer()/reverseTransfer() result, set on webhook outcome -- not in original spec, same pointer-field precedent as BankTransfer.settleLedgerTransactionId
+  retryCount          Int           @default(0) // not in original spec -- see header comment
+  requestedBy         String
+  approvedBy          String?
+  requestedAt         DateTime      @default(now())
+  approvedAt          DateTime?
+  executedAt          DateTime?
+  settledAt           DateTime?
+  failureCode         String?
+  failureReason       String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  company             Company      @relation(fields: [companyId], references: [id])
+  bankAccount         BankAccount  @relation(fields: [bankAccountId], references: [id])
+  beneficiary         Beneficiary  @relation(fields: [beneficiaryId], references: [id])
+  provider            Provider?    @relation(fields: [providerId], references: [id])
+  counterparty        Counterparty? @relation(fields: [counterpartyId], references: [id])
+  expenses            Expense[]
+
+  @@unique([companyId, idempotencyKey])
+  @@index([organizationId, status])
+  @@index([companyId, createdAt])
+  @@map("payments")
+}
+
+// Append-only per row (no update/delete grant, see AuditEvent) except the
+// status/processedAt/errorMessage transition RECEIVED -> PROCESSED/ERROR
+// that lib/providers/webhook.ts makes as it handles the event -- unlike
+// AuditEvent this is operational state, not a financial history record.
+model Webhook {
+  id               String        @id @default(uuid())
+  providerId       String
+  externalEventId  String
+  eventType        String
+  signatureValid   Boolean
+  payloadHash      String
+  receivedAt       DateTime      @default(now())
+  processedAt      DateTime?
+  status           WebhookStatus @default(RECEIVED)
+  errorMessage     String?
+
+  provider         Provider @relation(fields: [providerId], references: [id])
+
+  @@unique([providerId, externalEventId])
+  @@map("webhooks")
 }

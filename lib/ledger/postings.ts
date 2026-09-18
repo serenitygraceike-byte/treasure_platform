@@ -26,3 +26,11 @@ export function startTransferPosting(bankAddress: string, inTransitAddress: stri
 export function settleTransferPosting(inTransitAddress: string, destinationAddress: string, amount: bigint, asset: string): Posting {
   return { source: inTransitAddress, destination: destinationAddress, amount, asset };
 }
+
+// Not one of the four docs/02-LEDGER-SPEC.md patterns by name, but the
+// exact reverse of startTransferPosting -- the compensation path
+// docs/02-LEDGER-SPEC.md "Financial invariants" requires for a failed
+// external payment (lib/payments/payments.ts handlePaymentFailed).
+export function reverseTransferPosting(inTransitAddress: string, bankAddress: string, amount: bigint, asset: string): Posting {
+  return { source: inTransitAddress, destination: bankAddress, amount, asset };
+}

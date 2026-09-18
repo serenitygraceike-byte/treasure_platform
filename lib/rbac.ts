@@ -98,3 +98,45 @@ export async function canApproveExpense(
   });
   return !!companyMembership && EXPENSE_APPROVER_ROLES.includes(companyMembership.role);
 }
+
+// docs/05-MVP-ROADMAP.md Phase 6: Payment orchestration. Requesting a
+// payment is a treasury-adjacent action (it will move real money once
+// approved+executed), so it uses the treasury-manager role set, not
+// canManageExpenses' ACCOUNTANT-centric one -- ACCOUNTANT can still
+// request via TREASURY_MANAGER/ADMIN/OWNER at the org level if granted
+// that role, same dual org/company-level check as every other treasury
+// function here.
+const PAYMENT_REQUESTER_ROLES: OrgRole[] = ["OWNER", "ADMIN", "TREASURY_MANAGER"];
+
+export async function canRequestPayment(
+  companyId: string,
+  organizationId: string,
+  userId: string
+) {
+  const membership = await getOrgMembership(organizationId, userId);
+  if (membership && PAYMENT_REQUESTER_ROLES.includes(membership.role)) return true;
+  const companyMembership = await prisma.companyMembership.findUnique({
+    where: { companyId_userId: { companyId, userId } },
+  });
+  return !!companyMembership && PAYMENT_REQUESTER_ROLES.includes(companyMembership.role);
+}
+
+// Separate function from canApproveExpense even though the role set is
+// identical today -- payments and expenses are different domains that
+// may diverge later (docs/07-SECURITY-AND-AUDIT.md "For high-value
+// operations later: two-person approval" is a payments-specific rule
+// that wouldn't apply to expense approval).
+const PAYMENT_APPROVER_ROLES: OrgRole[] = ["OWNER", "ADMIN", "APPROVER"];
+
+export async function canApprovePayment(
+  companyId: string,
+  organizationId: string,
+  userId: string
+) {
+  const membership = await getOrgMembership(organizationId, userId);
+  if (membership && PAYMENT_APPROVER_ROLES.includes(membership.role)) return true;
+  const companyMembership = await prisma.companyMembership.findUnique({
+    where: { companyId_userId: { companyId, userId } },
+  });
+  return !!companyMembership && PAYMENT_APPROVER_ROLES.includes(companyMembership.role);
+}

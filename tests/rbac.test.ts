@@ -12,8 +12,10 @@ import {
   canAccessCompany,
   canApproveExpense,
   canApproveIntercompany,
+  canApprovePayment,
   canManageExpenses,
   canManageTreasury,
+  canRequestPayment,
   isOrgManager,
 } from "@/lib/rbac";
 
@@ -148,5 +150,45 @@ describe("canApproveExpense", () => {
     vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "ACCOUNTANT" } as never);
     vi.mocked(prisma.companyMembership.findUnique).mockResolvedValueOnce(null);
     expect(await canApproveExpense("company1", "org1", "user1")).toBe(false);
+  });
+});
+
+describe("canRequestPayment", () => {
+  it("is true for an org-level TREASURY_MANAGER without a CompanyMembership row", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "TREASURY_MANAGER" } as never);
+    expect(await canRequestPayment("company1", "org1", "user1")).toBe(true);
+    expect(prisma.companyMembership.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("is true for a company-level TREASURY_MANAGER even without org role", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce(null);
+    vi.mocked(prisma.companyMembership.findUnique).mockResolvedValueOnce({ role: "TREASURY_MANAGER" } as never);
+    expect(await canRequestPayment("company1", "org1", "user1")).toBe(true);
+  });
+
+  it("is false for a plain ACCOUNTANT with no treasury role", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "ACCOUNTANT" } as never);
+    vi.mocked(prisma.companyMembership.findUnique).mockResolvedValueOnce(null);
+    expect(await canRequestPayment("company1", "org1", "user1")).toBe(false);
+  });
+});
+
+describe("canApprovePayment", () => {
+  it("is true for an org-level APPROVER without a CompanyMembership row", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "APPROVER" } as never);
+    expect(await canApprovePayment("company1", "org1", "user1")).toBe(true);
+    expect(prisma.companyMembership.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("is true for a company-level APPROVER even without org role", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce(null);
+    vi.mocked(prisma.companyMembership.findUnique).mockResolvedValueOnce({ role: "APPROVER" } as never);
+    expect(await canApprovePayment("company1", "org1", "user1")).toBe(true);
+  });
+
+  it("is false for a plain TREASURY_MANAGER (requester, not approver)", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "TREASURY_MANAGER" } as never);
+    vi.mocked(prisma.companyMembership.findUnique).mockResolvedValueOnce(null);
+    expect(await canApprovePayment("company1", "org1", "user1")).toBe(false);
   });
 });

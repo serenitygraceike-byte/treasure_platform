@@ -8,6 +8,7 @@ import { toMinorUnits, fromMinorUnits } from "./money";
 import {
   releaseReservationPosting,
   reserveFundsPosting,
+  reverseTransferPosting,
   settleTransferPosting,
   startTransferPosting,
   type Posting,
@@ -99,6 +100,15 @@ export async function settleTransfer(
     settleTransferPosting(inTransit, input.destinationAddress, amount, input.asset),
     input
   );
+}
+
+export async function reverseTransfer(
+  input: { organizationId: string; companyId: string; bankAccountId: string; asset: string; amount: string } & MoneyOpContext
+): Promise<FormanceTransaction> {
+  const bank = bankAddress(input.organizationId, input.companyId, input.bankAccountId, input.asset);
+  const inTransit = inTransitAddress(input.organizationId, input.companyId, input.asset);
+  const amount = toMinorUnits(input.amount, input.asset);
+  return postSingle(reverseTransferPosting(inTransit, bank, amount, input.asset), input);
 }
 
 export async function getAccountBalance(

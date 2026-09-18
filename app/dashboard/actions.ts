@@ -26,6 +26,19 @@ import { upsertBudgetSchema } from "@/lib/validation/budget";
 import { createExpenseCategory } from "@/lib/expenses/categories";
 import { approveExpense, createExpense } from "@/lib/expenses/expenses";
 import { upsertBudget } from "@/lib/expenses/budgets";
+import { canApprovePayment, canRequestPayment } from "@/lib/rbac";
+import { createCounterpartySchema, createBeneficiarySchema } from "@/lib/validation/counterparty";
+import { createPaymentSchema } from "@/lib/validation/payment";
+import { createBeneficiary, createCounterparty } from "@/lib/counterparties";
+import {
+  approvePayment,
+  cancelPayment,
+  createPayment,
+  executePayment,
+  PaymentValidationError,
+  rejectPayment,
+} from "@/lib/payments/payments";
+import { simulateProviderWebhook } from "@/lib/providers/simulate";
 
 // Server Actions run as their own request -- getCurrentUser()/RBAC are
 // re-checked here, not inherited from whatever rendered the form. Every
@@ -448,6 +461,241 @@ export async function setBudgetAction(formData: FormData) {
     backTo(companyId, err instanceof Error ? err.message : "Could not set the budget.");
     return;
   }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+// ---------------------------------------------------------------------
+// Phase 6 — Payment orchestration (docs/05-MVP-ROADMAP.md). Counterparties
+// are org-scoped (isOrgManager, same as expense categories), requesting/
+// approving/executing a payment is company-scoped (canRequestPayment/
+// canApprovePayment/canManageTreasury) -- same split as the API routes.
+// ---------------------------------------------------------------------
+
+export async function addCounterpartyAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!company) backTo(companyId, "Company not found.");
+
+  if (!(await isOrgManager(company.organizationId, user.id))) {
+    backTo(companyId, "Only ADMIN or OWNER can manage counterparties.");
+    return;
+  }
+
+  const parsed = createCounterpartySchema.safeParse({
+    legalName: formData.get("legalName"),
+    type: formData.get("type"),
+  });
+  if (!parsed.success) {
+    backTo(companyId, parsed.error.issues[0]?.message ?? "Invalid counterparty.");
+    return;
+  }
+
+  await createCounterparty(company.organizationId, parsed.data, {
+    actorUserId: user.id,
+    correlationId: crypto.randomUUID(),
+  });
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function addBeneficiaryAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const counterpartyId = String(formData.get("counterpartyId"));
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const counterparty = await prisma.counterparty.findUnique({ where: { id: counterpartyId } });
+  if (!counterparty) {
+    backTo(companyId, "Counterparty not found.");
+    return;
+  }
+
+  if (!(await isOrgManager(counterparty.organizationId, user.id))) {
+    backTo(companyId, "Only ADMIN or OWNER can manage beneficiaries.");
+    return;
+  }
+
+  const parsed = createBeneficiarySchema.safeParse({
+    paymentMethod: formData.get("paymentMethod"),
+    payoutDetails: formData.get("payoutDetails"),
+  });
+  if (!parsed.success) {
+    backTo(companyId, parsed.error.issues[0]?.message ?? "Invalid beneficiary.");
+    return;
+  }
+
+  await createBeneficiary(counterparty, parsed.data, {
+    actorUserId: user.id,
+    correlationId: crypto.randomUUID(),
+  });
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function requestPaymentAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const company = await prisma.company.findUnique({ where: { id: companyId } });
+  if (!company) backTo(companyId, "Company not found.");
+
+  if (!(await canRequestPayment(companyId, company.organizationId, user.id))) {
+    backTo(companyId, "Only TREASURY_MANAGER, ADMIN or OWNER can request a payment.");
+    return;
+  }
+
+  const bankAccountId = String(formData.get("bankAccountId"));
+  const beneficiaryId = String(formData.get("beneficiaryId"));
+
+  const parsed = createPaymentSchema.safeParse({
+    companyId,
+    bankAccountId,
+    beneficiaryId,
+    paymentType: formData.get("paymentType"),
+    paymentMethod: formData.get("paymentMethod"),
+    amount: formData.get("amount"),
+    currency: formData.get("currency"),
+  });
+  if (!parsed.success) {
+    backTo(companyId, parsed.error.issues[0]?.message ?? "Invalid payment.");
+    return;
+  }
+
+  const bankAccount = await prisma.bankAccount.findUnique({ where: { id: bankAccountId } });
+  const beneficiary = await prisma.beneficiary.findUnique({
+    where: { id: beneficiaryId },
+    include: { counterparty: true },
+  });
+  if (!bankAccount || !beneficiary) {
+    backTo(companyId, "Bank account or beneficiary not found.");
+    return;
+  }
+
+  try {
+    await createPayment(company, bankAccount, beneficiary, {
+      ...parsed.data,
+      idempotencyKey: crypto.randomUUID(),
+      actorUserId: user.id,
+      correlationId: crypto.randomUUID(),
+    });
+  } catch (err) {
+    backTo(companyId, err instanceof PaymentValidationError ? err.message : "Could not request the payment.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+async function requirePaymentAndCompany(companyId: string, paymentId: string) {
+  const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+  if (!payment) backTo(companyId, "Payment not found.");
+  const company = await prisma.company.findUnique({ where: { id: payment.companyId } });
+  if (!company) backTo(companyId, "Payment not found.");
+  return { payment, company };
+}
+
+export async function approvePaymentAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const paymentId = String(formData.get("paymentId"));
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const { company } = await requirePaymentAndCompany(companyId, paymentId);
+  if (!(await canApprovePayment(company.id, company.organizationId, user.id))) {
+    backTo(companyId, "Only an APPROVER, ADMIN or OWNER can approve a payment.");
+    return;
+  }
+
+  await approvePayment(paymentId, { actorUserId: user.id, correlationId: crypto.randomUUID() });
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function rejectPaymentAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const paymentId = String(formData.get("paymentId"));
+  const user = await getCurrentUser();
+  if (!user) redirect("/sign-in");
+
+  const { company } = await requirePaymentAndCompany(companyId, paymentId);
+  if (!(await canApprovePayment(company.id, company.organizationId, user.id))) {
+    backTo(companyId, "Only an APPROVER, ADMIN or OWNER can reject a payment.");
+    return;
+  }
+
+  await rejectPayment(
+    paymentId,
+    { actorUserId: user.id, correlationId: crypto.randomUUID() },
+    (formData.get("reason") as string) || undefined
+  );
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function executePaymentAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const paymentId = String(formData.get("paymentId"));
+  const { user } = await requireTreasuryManager(companyId);
+
+  try {
+    await executePayment(paymentId, { actorUserId: user.id, correlationId: crypto.randomUUID() });
+  } catch (err) {
+    backTo(companyId, err instanceof Error ? err.message : "Could not execute the payment.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+export async function cancelPaymentAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const paymentId = String(formData.get("paymentId"));
+  const { user } = await requireTreasuryManager(companyId);
+
+  try {
+    await cancelPayment(paymentId, { actorUserId: user.id, correlationId: crypto.randomUUID() });
+  } catch (err) {
+    backTo(companyId, err instanceof Error ? err.message : "Could not cancel the payment.");
+    return;
+  }
+
+  revalidatePath("/dashboard");
+  backTo(companyId);
+}
+
+// Demo/dev-only: mock providers have no real async delivery, so a
+// PENDING payment (PROCESSING here) needs a manual nudge to exercise
+// the webhook framework end-to-end -- see lib/providers/simulate.ts.
+export async function simulatePaymentWebhookAction(formData: FormData) {
+  const companyId = String(formData.get("companyId"));
+  const paymentId = String(formData.get("paymentId"));
+  const outcome = String(formData.get("outcome")) === "FAILED" ? "FAILED" : "SUCCEEDED";
+  await requireTreasuryManager(companyId);
+
+  const payment = await prisma.payment.findUnique({ where: { id: paymentId } });
+  if (!payment?.providerId || !payment.providerPaymentId) {
+    backTo(companyId, "This payment has no pending provider callback to simulate.");
+    return;
+  }
+
+  await simulateProviderWebhook(
+    payment.providerId,
+    payment.providerPaymentId,
+    outcome,
+    outcome === "FAILED" ? { failureCode: "MOCK_SIMULATED", failureReason: "Simulated from the dashboard." } : undefined
+  );
 
   revalidatePath("/dashboard");
   backTo(companyId);
