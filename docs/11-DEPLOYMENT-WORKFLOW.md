@@ -39,6 +39,17 @@ separate staging box exists). "Deployed" means deployed there.
    every variable and can misbehave. `docker compose build` first, every
    time: `up`/`run` alone do not rebuild a changed image
    (`infrastructure/production/README.md`).
+
+   **Run `up -d web` as its own explicit command, and check its own
+   output for `Recreate`/`Recreated`/`Started` lines for `web`.**
+   Observed during Phase 6: chaining `run --rm migrate` and `up -d web`
+   in the same remote script left `web` on the old container (old code,
+   new routes 404) even though the image had already been rebuilt and
+   the migration succeeded — the `up -d web` step's own effect wasn't
+   confirmed from that combined output. Re-running `up -d web` alone
+   immediately recreated it correctly. Don't trust a combined script's
+   tail output as proof `web` restarted; step 5 below is what actually
+   catches this if it happens again.
 5. **Verify, on the server or against the public URL:**
    - `curl https://wau.digital/api/health` and `/api/ready` return 200.
    - `docker compose ps` shows the expected services `Up` (no
