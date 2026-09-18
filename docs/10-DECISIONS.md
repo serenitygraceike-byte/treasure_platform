@@ -45,3 +45,28 @@ Reference only.
 
 Repository:
 https://github.com/UNLV-CS472-672/2026-S-GROUP9-TreasuryHub
+
+## Decision 11 — Piraeus rAPId Link built against unverified documentation (Phase 9A)
+
+Decided (2026-09-20): `rapidlink.piraeusbank.gr` (including its Swagger
+JSON export) returned a TLS certificate this environment's fetch
+tooling could not verify — every direct page fetch failed with
+"unable to verify the first certificate." The Piraeus adapter
+(`lib/providers/piraeus/`) was therefore built on two things instead:
+(1) facts confirmed via search-indexed snippets of the same portal
+(OAuth param names, base gateway URL, that the AIS product covers
+accounts/cards/transactions, the balances/transactions endpoint
+existing, `dateFrom`/`dateTo`/`bookingStatus`), and (2) the Berlin
+Group NextGenPSD2/XS2A shape, which Piraeus's AIS product is confirmed
+(via the same search results) to implement, for everything else
+(exact field names/casing, pagination mechanism, token endpoint path).
+
+This is a deliberate, documented risk acceptance, not an oversight —
+every assumption is isolated behind the adapter with a `TODO(9A.2)`
+comment and listed in `docs/13-PIRAEUS-PROVIDER.md`'s "Assumptions"
+table. Phase 9A is explicitly not considered complete until a real
+sandbox/production connection (9A.2) confirms or corrects each one.
+Revisit this decision if the certificate issue turns out to be
+persistent for future provider work too (it would suggest fetching
+bank developer-portal docs needs a different tool/approach generally,
+not just for Piraeus).

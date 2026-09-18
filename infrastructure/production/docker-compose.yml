@@ -94,6 +94,25 @@ services:
     networks: [internal]
     profiles: ["tools"]
 
+  # Phase 9A -- docs/13-PIRAEUS-PROVIDER.md "Synchronization": a
+  # separate long-running process, same image/repo as `web` (modular
+  # monolith, not a microservice), polling ACTIVE provider_account_links
+  # on a conservative interval (PIRAEUS_SYNC_POLL_INTERVAL_SECONDS).
+  sync-worker:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: builder
+    container_name: treasury-sync-worker
+    restart: unless-stopped
+    command: npx tsx scripts/piraeus-sync-worker.ts
+    env_file: ../../.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    mem_limit: 256m
+
   caddy:
     image: caddy:2-alpine
     container_name: treasury-caddy

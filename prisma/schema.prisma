@@ -239,6 +239,7 @@ model BankAccount {
   intercompanyTransfersOut IntercompanyTransfer[] @relation("IntercompanySource")
   intercompanyTransfersIn  IntercompanyTransfer[] @relation("IntercompanyDestination")
   payments             Payment[]
+  providerAccountLinks ProviderAccountLink[]
 
   @@index([companyId])
   @@map("bank_accounts")
@@ -536,6 +537,7 @@ enum ProviderType {
   MOCK_BANK
   MOCK_CRYPTO
   MOCK_PAYOUT
+  PIRAEUS_BANK
 }
 
 enum ProviderStatus {
@@ -623,6 +625,7 @@ model Provider {
   organization           Organization @relation(fields: [organizationId], references: [id])
   payments               Payment[]
   webhooks               Webhook[]
+  connections            ProviderConnection[]
 
   @@unique([organizationId, type])
   @@map("providers")
@@ -691,4 +694,197 @@ model Webhook {
 
   @@unique([providerId, externalEventId])
   @@map("webhooks")
+}
+
+// ---------------------------------------------------------------------
+// Phase 9A domain models — docs/05-MVP-ROADMAP.md Phase 9 "First real
+// provider", read-only slice only (docs/13-PIRAEUS-PROVIDER.md). Adds
+// PIRAEUS_BANK as a real ProviderType (still auto-provisioned per-org
+// like the mock providers, same lib/providers/registry.ts pattern) and
+// six new tables -- the minimum this phase's checklist asks for:
+// provider/account binding, encrypted OAuth token state, observed
+// balances, observed transactions, sync cursor/state, and a short-lived
+// OAuth state store. None of this touches Payment/BankProvider/the
+// existing Webhook model (Piraeus AIS is pull/OAuth, not push-webhooks).
+//
+// Never write a real IBAN/account number into this file or any
+// migration -- see CLAUDE.md rule 19. These models store provider
+// account identifiers and IBANs only as runtime data (same DB-only
+// precedent as BankAccount.iban/Beneficiary.payoutDetailsEncrypted).
+// ---------------------------------------------------------------------
+
+enum ProviderConnectionStatus {
+  PENDING
+  CONNECTED
+  FAILED
+  REVOKED
+}
+
+// Server-side OAuth authorization-code state -- crypto-random,
+// single-use (consumedAt set on first valid callback), short TTL. The
+// callback trusts only what's stored here for organizationId/userId/
+// companyId, never anything the browser resubmits.
+model OAuthState {
+  id             String    @id @default(uuid())
+  organizationId String
+  userId         String
+  providerType   ProviderType
+  companyId      String?
+  createdAt      DateTime  @default(now())
+  expiresAt      DateTime
+  consumedAt     DateTime?
+
+  @@index([expiresAt])
+  @@map("oauth_states")
+}
+
+// One OAuth session per (organization, provider type) -- mirrors
+// Provider's own (organizationId, type) uniqueness. Tokens are opaque
+// ciphertext from lib/crypto/encryption.ts (PIRAEUS_TOKEN_ENCRYPTION_KEY),
+// never plaintext. `version` guards concurrent refreshes (optimistic
+// lock: a refresh only commits if it still matches the version it read).
+model ProviderConnection {
+  id                    String                   @id @default(uuid())
+  organizationId        String
+  providerId             String
+  status                 ProviderConnectionStatus @default(PENDING)
+  encryptedAccessToken   String?
+  encryptedRefreshToken  String?
+  tokenExpiresAt         DateTime?
+  grantedScope           String?
+  version                Int                      @default(0)
+  lastError              String?
+  connectedBy            String?
+  connectedAt            DateTime?
+  revokedAt              DateTime?
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+
+  provider               Provider              @relation(fields: [providerId], references: [id])
+  accountLinks           ProviderAccountLink[]
+
+  @@unique([organizationId, providerId])
+  @@map("provider_connections")
+}
+
+enum ProviderAccountLinkStatus {
+  ACTIVE
+  UNLINKED
+}
+
+// Binds one TreasuryHub BankAccount to one external provider account.
+// externalAccountId is the provider's own opaque identifier (masked
+// before ever appearing in logs/audit -- lib/providers/piraeus/mapper.ts).
+// externalAccountFingerprint is a keyed HMAC (PIRAEUS_FINGERPRINT_KEY)
+// over the provider's IBAN/identifier, used for deterministic matching
+// without comparing/logging raw IBANs. Only one ACTIVE link per
+// BankAccount is enforced by a partial unique index (migration.sql --
+// Prisma has no native partial-unique-index syntax for this).
+model ProviderAccountLink {
+  id                          String                    @id @default(uuid())
+  bankAccountId               String
+  providerConnectionId        String
+  externalAccountId           String
+  externalAccountFingerprint  String
+  status                      ProviderAccountLinkStatus @default(ACTIVE)
+  linkedBy                    String
+  linkedAt                    DateTime                  @default(now())
+  unlinkedAt                  DateTime?
+
+  bankAccount                 BankAccount        @relation(fields: [bankAccountId], references: [id])
+  providerConnection          ProviderConnection @relation(fields: [providerConnectionId], references: [id])
+  balanceObservations         BalanceObservation[]
+  externalTransactions        ExternalTransaction[]
+  syncState                   SyncState?
+
+  @@index([bankAccountId])
+  @@index([providerConnectionId])
+  @@map("provider_account_links")
+}
+
+// A point-in-time external balance reading. Purely observational --
+// docs/13-PIRAEUS-PROVIDER.md "Balance invariant": never written back
+// into Formance. balanceType is a free-text field (not an enum) because
+// the exact set of values PB API Accounts v1.2 returns is unconfirmed
+// (docs/13-PIRAEUS-PROVIDER.md Assumptions) -- an enum would reject a
+// real value we haven't seen yet.
+model BalanceObservation {
+  id                     String   @id @default(uuid())
+  organizationId         String
+  companyId              String
+  bankAccountId          String
+  providerAccountLinkId  String
+  balanceType            String
+  amount                 Decimal  @db.Decimal(20, 8)
+  currency               String   @db.Char(3)
+  observedAt             DateTime
+  createdAt              DateTime @default(now())
+
+  providerAccountLink    ProviderAccountLink @relation(fields: [providerAccountLinkId], references: [id])
+
+  @@index([bankAccountId, observedAt])
+  @@map("balance_observations")
+}
+
+enum CreditDebitIndicator {
+  CREDIT
+  DEBIT
+}
+
+// An imported bank transaction -- an external observation, modeled
+// separately from BankTransfer/Payment/Formance postings (docs/13-
+// PIRAEUS-PROVIDER.md "Transaction import"). `fingerprint` is the one
+// dedup key: the provider's own externalTransactionId when supplied,
+// else a keyed HMAC fallback (lib/providers/piraeus/mapper.ts) -- so a
+// repeated sync of the same date range is always safe.
+model ExternalTransaction {
+  id                     String                @id @default(uuid())
+  organizationId         String
+  companyId              String
+  bankAccountId          String
+  providerAccountLinkId  String
+  externalTransactionId  String?
+  fingerprint            String
+  bookingDate            DateTime
+  valueDate              DateTime?
+  amount                 Decimal               @db.Decimal(20, 8)
+  currency               String                @db.Char(3)
+  creditDebitIndicator   CreditDebitIndicator
+  remittanceInfo         String?
+  counterpartyName       String?
+  counterpartyIban       String?
+  providerReferenceCode  String?
+  syncedAt               DateTime              @default(now())
+  createdAt              DateTime              @default(now())
+
+  providerAccountLink    ProviderAccountLink @relation(fields: [providerAccountLinkId], references: [id])
+
+  @@unique([bankAccountId, fingerprint])
+  @@index([bankAccountId, bookingDate])
+  @@map("external_transactions")
+}
+
+enum SyncStatus {
+  IDLE
+  SYNCING
+  ERROR
+}
+
+// One sync cursor per linked account -- read/written only by
+// scripts/piraeus-sync-worker.ts and the manual-sync API route (which
+// checks nextAllowedSyncAt as its cooldown/rate guard).
+model SyncState {
+  id                     String     @id @default(uuid())
+  providerAccountLinkId  String     @unique
+  status                 SyncStatus @default(IDLE)
+  lastSyncedAt           DateTime?
+  lastSyncedBookingDate  DateTime?
+  consecutiveFailures    Int        @default(0)
+  lastError              String?
+  nextAllowedSyncAt      DateTime?
+  updatedAt              DateTime   @updatedAt
+
+  providerAccountLink    ProviderAccountLink @relation(fields: [providerAccountLinkId], references: [id])
+
+  @@map("sync_states")
 }

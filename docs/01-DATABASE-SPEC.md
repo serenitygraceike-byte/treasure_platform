@@ -391,9 +391,123 @@ extension" precedent as `bank_reservations`/`bank_transfers`/
 Unique:
 `(provider_id, external_event_id)` — Phase 6: the dedup key for CLAUDE.md rule 8. A row already PROCESSED short-circuits as a duplicate; a row stuck at RECEIVED/ERROR is retried in place (lib/providers/webhook.ts).
 
+### oauth_states (Phase 9A — not in the original spec)
+
+- id UUID PK (the state token itself)
+- organization_id FK
+- user_id
+- provider_type
+- company_id nullable
+- created_at
+- expires_at
+- consumed_at nullable
+
+Server-side OAuth authorization-code state — crypto-random, bound at
+issuance, single-use (`consumed_at` set atomically on first valid
+callback; see docs/13-PIRAEUS-PROVIDER.md). Short TTL, not a long-lived
+table — no index beyond `expires_at` for cleanup.
+
+### provider_connections (Phase 9A — not in the original spec)
+
+- id UUID PK
+- organization_id FK
+- provider_id FK
+- status (PENDING, CONNECTED, FAILED, REVOKED)
+- encrypted_access_token nullable
+- encrypted_refresh_token nullable
+- token_expires_at nullable
+- granted_scope nullable
+- version — optimistic-concurrency guard against corrupting stored tokens on a concurrent refresh (docs/13-PIRAEUS-PROVIDER.md)
+- last_error nullable
+- connected_by nullable
+- connected_at nullable
+- revoked_at nullable
+- created_at
+- updated_at
+
+Unique: `(organization_id, provider_id)` — one OAuth session per org
+per provider, mirrors `providers`' own `(organization_id, type)`
+uniqueness. Tokens are opaque ciphertext (AES-256-GCM,
+`PIRAEUS_TOKEN_ENCRYPTION_KEY`), never plaintext.
+
+### provider_account_links (Phase 9A — not in the original spec)
+
+- id UUID PK
+- bank_account_id FK
+- provider_connection_id FK
+- external_account_id — the provider's own opaque identifier
+- external_account_fingerprint — keyed HMAC (`PIRAEUS_FINGERPRINT_KEY`), never a plain hash
+- status (ACTIVE, UNLINKED)
+- linked_by
+- linked_at
+- unlinked_at nullable
+
+Binds one existing `bank_accounts` row to one external provider
+account. Explicit, one-at-a-time (never auto-linked). Only one `ACTIVE`
+link per `bank_account_id`, enforced by a partial unique index
+(hand-written SQL in the migration — no native Prisma syntax for it).
+
+### balance_observations (Phase 9A — not in the original spec)
+
+- id UUID PK
+- organization_id FK
+- company_id FK
+- bank_account_id FK
+- provider_account_link_id FK
+- balance_type — free text, not an enum (the exact vocabulary PB API Accounts v1.2 returns is unconfirmed, docs/13-PIRAEUS-PROVIDER.md)
+- amount NUMERIC(20,8)
+- currency CHAR(3)
+- observed_at
+- created_at
+
+A point-in-time external balance reading. Purely observational — see
+docs/02-LEDGER-SPEC.md-style invariant in docs/13-PIRAEUS-PROVIDER.md
+"Balance invariant": never written back into Formance.
+
+### external_transactions (Phase 9A — not in the original spec)
+
+- id UUID PK
+- organization_id FK
+- company_id FK
+- bank_account_id FK
+- provider_account_link_id FK
+- external_transaction_id nullable — the provider's own stable id, preserved verbatim when supplied
+- fingerprint — the actual dedup key: external_transaction_id when present, else a keyed HMAC fallback over (bank_account_id, booking_date, amount, currency, remittance_info)
+- booking_date
+- value_date nullable
+- amount NUMERIC(20,8)
+- currency CHAR(3)
+- credit_debit_indicator (CREDIT, DEBIT)
+- remittance_info nullable
+- counterparty_name nullable
+- counterparty_iban nullable — DB-only, same precedent as bank_accounts.iban; never logged
+- provider_reference_code nullable
+- synced_at
+- created_at
+
+Unique: `(bank_account_id, fingerprint)` — a repeated sync of the same
+date range always reports 0 new rows on the second run. An external
+observation, modeled separately from `payments`/Formance postings —
+never auto-posted.
+
+### sync_states (Phase 9A — not in the original spec)
+
+- id UUID PK
+- provider_account_link_id FK, unique
+- status (IDLE, SYNCING, ERROR)
+- last_synced_at nullable
+- last_synced_booking_date nullable
+- consecutive_failures
+- last_error nullable
+- next_allowed_sync_at nullable — cooldown/rate guard for manual sync
+- updated_at
+
+One cursor per linked account, read/written only by
+`scripts/piraeus-sync-worker.ts` and the manual-sync API route.
+
 ### reconciliations
 
-Not implemented as of Phase 6 — docs/05-MVP-ROADMAP.md's Phase 6 bullets (approval workflow, provider interface, mock provider, webhook framework, failure/retry model) don't call for it; reconciliation exceptions arrive with Phase 9's real provider.
+Not implemented as of Phase 6/9A — docs/05-MVP-ROADMAP.md's Phase 6 bullets (approval workflow, provider interface, mock provider, webhook framework, failure/retry model) don't call for it, and Phase 9A is deliberately read-only/non-reconciling; reconciliation exceptions arrive with Phase 9B's real provider payment execution.
 
 - id UUID PK
 - organization_id FK

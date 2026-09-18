@@ -22,6 +22,42 @@ Base path:
 - POST `/companies/:id/bank-accounts`
 - PATCH `/bank-accounts/:id`
 
+## Piraeus provider connection (Phase 9A — not in the original spec)
+
+- POST `/providers/piraeus/connect`
+- GET `/providers/piraeus/callback`
+
+Provider-specific OAuth namespace (the task/spec explicitly allows
+this, unlike bank data itself, which stays provider-neutral below).
+`connect` requires an org-level `TREASURY_MANAGER`, `ADMIN` or `OWNER`
+(`canManageProviderConnections`) and body `{ organizationId,
+companyId? }`; returns `{ authorizationUrl }`. `callback` is the
+browser redirect target Piraeus itself calls (`code`/`state` query
+params, no app auth header) — see docs/13-PIRAEUS-PROVIDER.md for how
+`state` is validated without trusting the browser.
+
+## Bank account provider linking & sync (Phase 9A — not in the original spec)
+
+- GET `/bank-accounts/:id/provider-accounts?connectionId=`
+- POST `/bank-accounts/:id/link-provider-account`
+- POST `/bank-accounts/:id/unlink-provider-account`
+- GET `/bank-accounts/:id/external-balance`
+- GET `/bank-accounts/:id/external-transactions?limit=`
+- POST `/bank-accounts/:id/sync`
+
+Provider-neutral on purpose (docs/13-PIRAEUS-PROVIDER.md "API") — a
+future Alpha Bank/NBG/Raiffeisen/Mercury/Revolut adapter reuses this
+same surface, keyed by `connectionId`/`ProviderAccountLink`, not a
+provider-specific path. `link-provider-account`/`unlink-provider-
+account`/`sync` require `TREASURY_MANAGER`/`ADMIN`/`OWNER` on that
+company (`canManageTreasury`); `provider-accounts`/`external-balance`/
+`external-transactions` are read-only (`external-balance`/
+`external-transactions` use `canAccessCompany`; `provider-accounts`,
+which calls out to Piraeus, uses `canManageTreasury`). `sync` is rate-
+guarded (429 during cooldown, `PIRAEUS_MANUAL_SYNC_COOLDOWN_SECONDS`).
+`external-balance` returns a read-only comparison against the Formance
+ledger balance, never a write.
+
 ## Reservations (Phase 3 — not in the original spec)
 
 - POST `/bank-accounts/:id/reservations`

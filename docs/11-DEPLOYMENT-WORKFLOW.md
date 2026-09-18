@@ -30,10 +30,13 @@ separate staging box exists). "Deployed" means deployed there.
       `docker exec treasury-postgres pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" | gzip > /opt/treasury-platform/infrastructure/production/backups/pre-<phase>-$(date +%Y%m%d-%H%M%S).sql.gz`
    2. `git fetch origin main && git reset --hard origin/main`
    3. `cd infrastructure/production`
-   4. `docker compose --env-file ../../.env build migrate web`
+   4. `docker compose --env-file ../../.env build migrate web` (add
+      `sync-worker` too once Phase 9A is deployed — same `builder`
+      stage, see `docs/13-PIRAEUS-PROVIDER.md`)
    5. If this phase added a migration:
       `docker compose --env-file ../../.env run --rm migrate`
-   6. `docker compose --env-file ../../.env up -d web`
+   6. `docker compose --env-file ../../.env up -d web` (and `sync-worker`
+      once Phase 9A is deployed)
 
    Always pass `--env-file ../../.env` — without it, compose warns about
    every variable and can misbehave. `docker compose build` first, every

@@ -18,6 +18,7 @@ Before changing code, read:
 6. `/docs/05-MVP-ROADMAP.md`
 7. `/docs/11-DEPLOYMENT-WORKFLOW.md`
 8. `/docs/12-REAL-ENTITIES.md`
+9. `/docs/13-PIRAEUS-PROVIDER.md`
 
 Read the relevant module document before implementing that module.
 
@@ -42,6 +43,7 @@ Read the relevant module document before implementing that module.
 17. Do not mix accounting/statutory tax logic into treasury logic without a separate specification.
 18. A phase is not complete until it is deployed to the production server and verified there, per `/docs/11-DEPLOYMENT-WORKFLOW.md`. Passing local tests is necessary, not sufficient.
 19. Never write a real bank account number (IBAN or otherwise) into any git-tracked file, including `prisma/seed.ts` — it belongs only in the production database, entered via a one-off, non-committed script (see `/docs/12-REAL-ENTITIES.md`). Registration numbers, VAT numbers, and BIC/SWIFT codes are public record and fine to document.
+20. A real-provider integration phase (e.g. Phase 9A) is not "complete" on implementation alone — it requires a documented real-environment verification pass (see the phase's own doc, e.g. `/docs/13-PIRAEUS-PROVIDER.md`'s "Completion gate") before being reported as done.
 
 ## Development order
 

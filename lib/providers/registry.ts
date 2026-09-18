@@ -47,10 +47,17 @@ export async function createProviderPayment(
       return mockCryptoProvider.createPayment(input);
     case "MOCK_PAYOUT":
       return mockPayoutProvider.createPayout(input);
+    case "PIRAEUS_BANK":
+      // Phase 9A is read-only (docs/13-PIRAEUS-PROVIDER.md) -- PIRAEUS_BANK
+      // implements BankAccountInformationProvider (lib/providers/types.ts),
+      // not BankProvider. Payment execution stays on MOCK_BANK
+      // (providerTypeForPaymentMethod never maps BANK_TRANSFER here);
+      // reaching this case would be a bug elsewhere, not a valid call.
+      throw new Error("PIRAEUS_BANK does not support payment execution in Phase 9A.");
   }
 }
 
-export function verifyProviderWebhook(providerType: ProviderType, request: Request): Promise<ProviderEvent> {
+export async function verifyProviderWebhook(providerType: ProviderType, request: Request): Promise<ProviderEvent> {
   switch (providerType) {
     case "MOCK_BANK":
       return mockBankProvider.verifyWebhook(request);
@@ -58,5 +65,9 @@ export function verifyProviderWebhook(providerType: ProviderType, request: Reque
       return mockCryptoProvider.verifyWebhook(request);
     case "MOCK_PAYOUT":
       return mockPayoutProvider.verifyWebhook(request);
+    case "PIRAEUS_BANK":
+      // Piraeus AIS is pull/OAuth, not push-webhooks (docs/13-PIRAEUS-
+      // PROVIDER.md) -- there is no webhook to verify.
+      throw new Error("PIRAEUS_BANK does not send webhooks in Phase 9A.");
   }
 }

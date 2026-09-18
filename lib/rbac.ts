@@ -140,3 +140,17 @@ export async function canApprovePayment(
   });
   return !!companyMembership && PAYMENT_APPROVER_ROLES.includes(companyMembership.role);
 }
+
+// docs/05-MVP-ROADMAP.md Phase 9A: connecting/syncing a bank data
+// provider (Piraeus and later adapters) is org-level, not company-
+// scoped, like canApproveIntercompany -- a ProviderConnection belongs
+// to the organization, not to one company, even though a *linked*
+// BankAccount is company-scoped (checked separately via
+// canAccessCompany/canManageTreasury at the specific bank-account
+// routes).
+const PROVIDER_CONNECTION_MANAGER_ROLES: OrgRole[] = ["OWNER", "ADMIN", "TREASURY_MANAGER"];
+
+export async function canManageProviderConnections(organizationId: string, userId: string) {
+  const membership = await getOrgMembership(organizationId, userId);
+  return !!membership && PROVIDER_CONNECTION_MANAGER_ROLES.includes(membership.role);
+}

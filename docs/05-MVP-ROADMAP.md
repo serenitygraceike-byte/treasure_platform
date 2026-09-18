@@ -106,6 +106,25 @@ Choose ONE:
 Implement end-to-end:
 create -> execute -> webhook -> ledger -> reconciliation.
 
+Chosen: bank (Piraeus Bank rAPId Link), split into two sub-phases —
+see `docs/13-PIRAEUS-PROVIDER.md`.
+
+### Phase 9A — Piraeus Bank Account Information Provider (read-only)
+
+Account discovery, balance observation, transaction synchronization.
+No money movement, no payment execution, no change to Phase 6's
+`BANK_TRANSFER -> MOCK_BANK` routing. 9A.1 (implementation, this repo)
+is not "done" until 9A.2 (real sandbox/production OAuth connection
+verified against actual Piraeus credentials) — see
+`docs/13-PIRAEUS-PROVIDER.md` "Completion gate".
+
+### Phase 9B — Piraeus payment execution (not started)
+
+create -> execute -> webhook -> ledger -> reconciliation, the full
+"first real provider" acceptance criteria above, building on 9A's
+account linking/OAuth infrastructure. Requires its own explicit task
+(`CLAUDE.md` rule 13) — not implied by 9A.
+
 ## Phase 10 — Production hardening
 
 - backup restore

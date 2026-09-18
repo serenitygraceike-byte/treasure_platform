@@ -14,6 +14,7 @@ import {
   canApproveIntercompany,
   canApprovePayment,
   canManageExpenses,
+  canManageProviderConnections,
   canManageTreasury,
   canRequestPayment,
   isOrgManager,
@@ -190,5 +191,28 @@ describe("canApprovePayment", () => {
     vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "TREASURY_MANAGER" } as never);
     vi.mocked(prisma.companyMembership.findUnique).mockResolvedValueOnce(null);
     expect(await canApprovePayment("company1", "org1", "user1")).toBe(false);
+  });
+});
+
+describe("canManageProviderConnections", () => {
+  it("is true for an org-level TREASURY_MANAGER", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "TREASURY_MANAGER" } as never);
+    expect(await canManageProviderConnections("org1", "user1")).toBe(true);
+  });
+
+  it("is true for OWNER/ADMIN", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "OWNER" } as never);
+    expect(await canManageProviderConnections("org1", "user1")).toBe(true);
+  });
+
+  it("is org-level only -- never falls back to a CompanyMembership", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce(null);
+    expect(await canManageProviderConnections("org1", "user1")).toBe(false);
+    expect(prisma.companyMembership.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("is false for a plain VIEWER", async () => {
+    vi.mocked(prisma.membership.findUnique).mockResolvedValueOnce({ role: "VIEWER" } as never);
+    expect(await canManageProviderConnections("org1", "user1")).toBe(false);
   });
 });
